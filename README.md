@@ -1,6 +1,16 @@
 # Orbit App
 
-A private Electron desktop prototype for local agent work. Create a project and session, send a task to native Ollama, and review writes or commands before Orbit executes them in a network-disabled container. No cloud model fallback.
+A local Electron desktop prototype for local agent work. Create a project and session, send a task to native Ollama, and review writes or commands before Orbit executes them in a network-disabled container. No cloud model fallback.
+
+## Desktop preview
+
+![Orbit App with a clean demo workspace, two sessions, and connected local services](docs/assets/orbit-app-demo.png)
+
+Actual Electron UI in a clean demo project. The task text is prepared but has not been submitted.
+
+## About Orbit
+
+[Orbit](https://github.com/cybergarage/orbit) is the TypeScript agent execution framework underlying this app. It provides model adapters, including Ollama, tools, sessions, and execution and approval controls. Orbit App adds the desktop interface and coordinates native host Ollama with containerized Orbit workers.
 
 ## Requirements
 

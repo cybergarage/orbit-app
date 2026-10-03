@@ -10,6 +10,13 @@ import { Supervisor } from "../src/supervisor";
 async function directory() {
 	return fs.mkdtemp(path.join(os.tmpdir(), "orbit-app-test-"));
 }
+async function waitFor(predicate: () => boolean) {
+	const deadline = Date.now() + 10000;
+	while (!predicate()) {
+		if (Date.now() > deadline) throw Error("Lifecycle condition timed out");
+		await new Promise((r) => setTimeout(r, 2));
+	}
+}
 test("project paths reject traversal; projects have independent workspaces", async () => {
 	const root = await directory();
 	const store = new Store(root);
@@ -116,7 +123,7 @@ test("single worker admission, cancellation and duplicate request rejection", as
 	);
 	assert.equal(count, 1);
 	await sup.cancel();
-	await new Promise((r) => setTimeout(r, 20));
+	await waitFor(() => !sup.worker);
 	await assert.rejects(sup.submit(input), /Duplicate/);
 	assert.equal(s.status, "cancelled");
 });
@@ -210,6 +217,7 @@ test("expired and stale approvals cannot be forwarded", () => {
 test("new submissions stay blocked until prior container cleanup is confirmed", async () => {
 	let finish: () => void = () => {},
 		reclaim: () => void = () => {};
+	let cleanupStarted = false;
 	const sup = new Supervisor(
 		await directory(),
 		() => {},
@@ -223,6 +231,7 @@ test("new submissions stay blocked until prior container cleanup is confirmed", 
 				stop: async () => finish(),
 				confirmGone: () =>
 					new Promise<void>((r) => {
+						cleanupStarted = true;
 						reclaim = r;
 					}),
 			}) as unknown as Worker,
@@ -246,12 +255,12 @@ test("new submissions stay blocked until prior container cleanup is confirmed", 
 	};
 	await sup.submit(input);
 	finish();
-	await new Promise((r) => setTimeout(r, 10));
+	await waitFor(() => cleanupStarted);
 	await assert.rejects(
 		sup.submit({ ...input, requestId: randomUUID() }),
 		/already active/,
 	);
 	reclaim();
-	await new Promise((r) => setTimeout(r, 10));
+	await waitFor(() => !sup.worker);
 	assert.equal(sup.store.state.active, undefined);
 });

@@ -1,0 +1,26 @@
+name: Prototype checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install-deps chromium
+      - run: xvfb-run -a npx playwright test
+      - run: npm run worker:build
+      - name: Offline worker import and shell smoke check
+        run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --workdir /opt/worker --entrypoint node orbit-app-worker:0.1.0 --input-type=module -e "import {Agent} from '@cybergarage/orbit'; import {execFileSync} from 'node:child_process'; if(typeof Agent !== 'function')process.exit(1); console.log(execFileSync('bash',['-lc','echo worker-ready']).toString());"

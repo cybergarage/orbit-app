@@ -1,0 +1,8 @@
+{
+	"name": "orbit-app-worker",
+	"private": true,
+	"type": "module",
+	"dependencies": {
+		"@cybergarage/orbit": "0.8.1"
+	}
+}

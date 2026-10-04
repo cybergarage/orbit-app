@@ -1,4 +1,11 @@
+![Work in progress](https://img.shields.io/badge/status-Work%20In%20Progress-8A2BE2)
+[![Build Status](https://github.com/cybergarage/orbit-app/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cybergarage/orbit-app/actions/workflows/ci.yml)
+
 # Orbit App
+
+Developer desktop workspace powered by Orbit.
+
+Related projects: [Orbit](https://github.com/cybergarage/orbit) · [Orbit Nest](https://github.com/cybergarage/orbit-nest).
 
 A local Electron desktop prototype for local agent work. Create a project and session, send a task to native Ollama, and review writes or commands before Orbit executes them in a network-disabled container. No cloud model fallback.
 

@@ -390,6 +390,7 @@ td button {
 	padding: 8px;
 }
 .modal {
+	color: var(--text);
 	position: fixed;
 	inset: 0;
 	background: transparent;

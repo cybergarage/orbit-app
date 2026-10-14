@@ -59,7 +59,7 @@ function App() {
 			if (execution) {
 				return (
 					<>
-						<button type="button" onClick={() => setRun("")}>
+						<button type="button" onClick={() => setRunId("")}>
 							Back to execution history
 						</button>
 						<h2>Execution details</h2>
@@ -120,7 +120,7 @@ function App() {
 										: "In progress"}
 								</td>
 								<td>
-									<button type="button" onClick={() => setRun(r.id)}>
+									<button type="button" onClick={() => setRunId(r.id)}>
 										View details
 									</button>
 								</td>
@@ -210,7 +210,7 @@ function App() {
 		sessionId: string;
 	}>();
 	const [history, setHistory] = useState(false);
-	const [runId, setRun] = useState("");
+	const [runId, setRunId] = useState("");
 	const [when, setWhen] = useState("");
 	const [repeat, setRepeat] = useState("0");
 	const [artifacts, setArtifacts] = useState<string[]>([]);
@@ -733,7 +733,7 @@ function App() {
 							className={!history ? "selected" : ""}
 							onClick={() => {
 								setHistory(false);
-								setRun("");
+								setRunId("");
 							}}
 						>
 							Schedules
@@ -743,7 +743,7 @@ function App() {
 							className={history ? "selected" : ""}
 							onClick={() => {
 								setHistory(true);
-								setRun("");
+								setRunId("");
 							}}
 						>
 							Execution history

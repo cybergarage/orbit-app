@@ -3,13 +3,29 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+const testRoots: string[] = [];
+const testApps: Awaited<ReturnType<typeof electron.launch>>[] = [];
+test.afterEach(async () => {
+	await Promise.all(
+		testApps.splice(0).map((app) => app.close().catch(() => {})),
+	);
+	await Promise.all(
+		testRoots
+			.splice(0)
+			.map((root) => fs.rm(root, { recursive: true, force: true })),
+	);
+});
 async function fixture() {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-approved-ui-"));
-	const launch = () =>
-		electron.launch({
+	testRoots.push(root);
+	const launch = async () => {
+		const app = await electron.launch({
 			args: process.env.CI ? [".", "--no-sandbox"] : ["."],
 			env: { ...process.env, ORBIT_APP_TEST: "1", ORBIT_APP_DATA: root },
 		});
+		testApps.push(app);
+		return app;
+	};
 	return { root, launch };
 }
 test("project create/edit cancel, session rename/move, outside/ESC dismissal and restart preserve history", async () => {

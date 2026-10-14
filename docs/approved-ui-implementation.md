@@ -37,7 +37,7 @@ The examined Orbit source includes ProjectService and DurableWorkStore. ProjectS
 - The configured existing image was previously confirmed as `sha256:b089106c52cce29187988972f8da14f8d8cb95c3cc78a063c42f38636ebbbf19` (linux/arm64, created 2026-10-03). An earlier absent/present detection discrepancy is unexplained.
 - After disk cleanup, available capacity was 43GiB. An authorized Docker Desktop CLI restart failed while waiting for processes to stop. Normal macOS Quit/Open returned successfully, but bounded daemon reads still timed out. No image build/pull/install, volume/image deletion or factory reset was performed.
 
-**Remaining live verification:** the corrected cancellation/re-submission and moved conversation's real Orbit history recall after restart require a responsive Docker daemon. They are not claimed to pass. Existing Ollama/model access alone cannot run the isolated worker. Re-run once Docker is responsive:
+**Historical PR #4 live verification gap:** the corrected cancellation/re-submission and moved conversation's real Orbit history recall after restart require a responsive Docker daemon. They are not claimed to pass. Existing Ollama/model access alone cannot run the isolated worker. Re-run once Docker is responsive:
 
 ```sh
 npm run build
@@ -55,3 +55,11 @@ S9011 (3) flagged intentional default form submission rather than a reproduced m
 There are no automatic suppressions or changed Sonar settings. Remote analysis of the updated PR HEAD is the authority for remaining rule findings. The separate real-worker cancellation/retry and moved-history checks are still unverified while Docker is unresponsive.
 
 The first follow-up Sonar analysis (`faccb23263d40fe9e096269001d49c8228b36c46`) closed all original 35 findings as FIXED, with Security/Reliability/Maintainability A and a passing gate. It reported one new MINOR S6754 setter-name finding, addressed by naming the run selection setter `setRunId`. Native dialog text explicitly inherits the approved palette. The latest remote check remains the authority for the final HEAD.
+
+## Cancellation classification follow-up
+
+The host retains a request-scoped cancellation intent and correlates host model-cancellation events with the worker's raw result. Only an effective cancellation with cancellation evidence receives the cancelled display classification; independent failures retain failed. Successful terminal results remain completed even if a stop races completion. Raw worker outcome/reason and request IDs remain in history and are visible in result messages. Events received after a request finishes are archived under that request and cannot overwrite the next request's status or answer. Cancellation intent is recorded once, including whether it was effective.
+
+The targeted regressions cover repeated cancellation, delayed run phases/results, genuine failures before/after cancellation, successful completion racing stop, restart persistence and cancellation followed by a fresh request. The opt-in real Worker test now asserts cancelled display and retained intent, then checks real re-submission and moved/restarted history recall; its generated fixture is removed on exit. No worker image/dependency changes are required.
+
+On the cancellation follow-up candidate, the existing pinned Worker passed real cancelled display, request-scoped intent retention, cancellation followed by successful re-submission, and project move plus application restart followed by real recall of the original marker. The raw cancelled turn outcome remained failed/runtime-failed while the host display correctly became cancelled. All generated fixture data was removed by the test. Unit coverage now includes genuine failures, successful/late completion, budget/incomplete outcomes, stale prior-worker events, repeated cancellation and scheduled preflight cancellation. No cache/volume prune or dependency update was performed.

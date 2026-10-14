@@ -204,8 +204,13 @@ export class Worker {
 	}
 	async rpc(e: any) {
 		if (this.stopping || this.controller.signal.aborted) {
-			if (typeof e.id === "string" && /^[a-f0-9-]{36}$/.test(e.id))
+			if (typeof e.id === "string" && /^[a-f0-9-]{36}$/.test(e.id)) {
+				this.event({
+					type: "model-cancelled",
+					data: { rpcId: e.id, reason: "host cancellation" },
+				});
 				this.send({ type: "rpc-result", id: e.id, error: "Worker cancelled" });
+			}
 			return;
 		}
 		if (
@@ -236,6 +241,11 @@ export class Worker {
 			);
 			this.send({ type: "rpc-result", id: e.id, data });
 		} catch (error) {
+			if (this.controller.signal.aborted)
+				this.event({
+					type: "model-cancelled",
+					data: { rpcId: e.id, reason: "host cancellation" },
+				});
 			this.send({ type: "rpc-result", id: e.id, error: String(error) });
 		} finally {
 			this.rpcActive--;

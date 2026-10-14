@@ -32,7 +32,10 @@ function NativeDialog({
 }
 function eventContent(event: EventRecord) {
 	if (event.type === "submission") return event.data.prompt;
-	if (event.type === "result") return event.data.answer;
+	if (event.type === "result") {
+		const runtime = event.data.runtime;
+		return `${event.data.answer ?? ""}\nRuntime: ${runtime?.outcome ?? "unknown"} (${runtime?.reason ?? ""})`;
+	}
 	if (typeof event.data === "string") return event.data;
 	return JSON.stringify(event.data, null, 2);
 }

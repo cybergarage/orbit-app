@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { randomUUID } from "node:crypto";
 import type { Snapshot, Project, DesktopSession } from "./types";
 export function identifier(value: unknown): string {
@@ -25,6 +26,32 @@ export class Store {
 		} catch (e: any) {
 			if (e.code !== "ENOENT") throw e;
 		}
+		await fs
+			.copyFile(
+				path.join(this.root, "state.json"),
+				path.join(this.root, "state.pre-approved-ui.json"),
+				fs.constants.COPYFILE_EXCL,
+			)
+			.catch((e) => {
+				if (!["ENOENT", "EEXIST"].includes(e.code)) throw e;
+			});
+		this.state.executions ??= [];
+		for (const run of this.state.executions)
+			if (!run.endedAt) {
+				run.status = "interrupted";
+				run.endedAt = Date.now();
+				run.events.push({
+					id: randomUUID(),
+					type: "interrupted",
+					at: new Date().toISOString(),
+					data: "App exited before completion; this occurrence will not be replayed.",
+				});
+			}
+		for (const p of this.state.projects)
+			for (const s of p.sessions) {
+				s.storageProjectId ??= p.id;
+				s.workspace ??= this.workspace(p.id);
+			}
 		for (const p of this.state.projects)
 			for (const s of p.sessions)
 				if (
@@ -64,8 +91,20 @@ export class Store {
 		if (!s) throw Error("Session not found");
 		return s;
 	}
-	async createProject(name: unknown) {
-		const p: Project = { id: randomUUID(), name: text(name, 80), sessions: [] };
+	async createProject(
+		name: unknown,
+		directory?: unknown,
+		instructions?: unknown,
+		unassigned = false,
+	) {
+		const p: Project = {
+			id: randomUUID(),
+			name: text(name, 80),
+			directory: await this.directory(directory),
+			instructions: this.instructions(instructions),
+			unassigned,
+			sessions: [],
+		};
 		this.state.projects.push(p);
 		await fs.mkdir(this.workspace(p.id), { recursive: true, mode: 0o700 });
 		await fs.mkdir(this.core(p.id), { recursive: true, mode: 0o700 });
@@ -79,10 +118,109 @@ export class Store {
 			name: `Session ${p.sessions.length + 1}`,
 			events: [],
 			status: "idle",
+			storageProjectId: p.id,
+			workspace: p.directory ?? this.workspace(p.id),
 		};
 		p.sessions.push(s);
 		await this.save();
 		return s;
+	}
+	async directory(value: unknown): Promise<string | undefined> {
+		if (value === undefined || value === "") return undefined;
+		const input = text(value, 4096);
+		if (!path.isAbsolute(input) || /[,\n\r]/.test(input))
+			throw Error("Use an absolute local directory without commas or newlines");
+		const resolved = await fs.realpath(input);
+		const home = await fs.realpath(os.homedir());
+		const temporary = await fs.realpath(os.tmpdir());
+		if (
+			(!resolved.startsWith(`${home}${path.sep}`) &&
+				!resolved.startsWith("/private/tmp/") &&
+				!resolved.startsWith("/tmp/") &&
+				!resolved.startsWith(`${temporary}${path.sep}`)) ||
+			["/", home].includes(resolved) ||
+			resolved
+				.split(path.sep)
+				.some((part) =>
+					[
+						".ssh",
+						".aws",
+						".docker",
+						".config",
+						".codex",
+						".ollama",
+						"Library",
+					].includes(part),
+				)
+		)
+			throw Error(
+				"Home, system and credential directories cannot be worker workspaces",
+			);
+		if (!(await fs.stat(resolved)).isDirectory())
+			throw Error("Working directory must exist");
+		return resolved;
+	}
+	instructions(value: unknown) {
+		return value === undefined || value === "" ? undefined : text(value);
+	}
+	assertMovable(projectId: unknown, sessionId: unknown) {
+		const s = this.session(projectId, sessionId);
+		if (
+			this.state.active?.sessionId === s.id ||
+			[
+				"running",
+				"starting",
+				"awaiting-approval",
+				"cancelling",
+				"recovery-blocked",
+			].includes(s.status)
+		)
+			throw Error(
+				"Running or recovery-pending sessions cannot be moved or renamed",
+			);
+		return s;
+	}
+	async editProject(p: any) {
+		const project = this.project(p.projectId);
+		const directory = await this.directory(p.directory);
+		const name = text(p.name, 80),
+			instructions = this.instructions(p.instructions);
+		Object.assign(project, { name, directory, instructions });
+		await this.save();
+		return project;
+	}
+	async renameSession(p: any) {
+		const s = this.session(p.projectId, p.sessionId);
+		s.name = text(p.name, 80);
+		await this.save();
+		return s;
+	}
+	async moveSession(p: any) {
+		const source = this.project(p.projectId),
+			target = this.project(p.targetProjectId);
+		const s = this.assertMovable(source.id, p.sessionId);
+		if (source.id === target.id) return s;
+		s.storageProjectId ??= source.id;
+		s.workspace ??= this.workspace(source.id);
+		source.sessions = source.sessions.filter((item) => item !== s);
+		target.sessions.push(s);
+		for (const schedule of this.state.schedules)
+			if (schedule.sessionId === s.id) schedule.projectId = target.id;
+		await this.save();
+		return s;
+	}
+	async chats() {
+		return (
+			this.state.projects.find((p) => p.unassigned) ??
+			this.createProject("Chats", undefined, undefined, true)
+		);
+	}
+	location(projectId: unknown, sessionId: unknown) {
+		const s = this.session(projectId, sessionId);
+		return {
+			workspace: s.workspace ?? this.workspace(this.project(projectId).id),
+			core: this.core(s.storageProjectId ?? this.project(projectId).id),
+		};
 	}
 	workspace(id: string) {
 		return path.join(this.root, "projects", identifier(id), "workspace");

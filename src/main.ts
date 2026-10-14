@@ -25,7 +25,7 @@ void app.whenReady().then(async () => {
 		minWidth: 900,
 		minHeight: 620,
 		title: "Orbit App",
-		backgroundColor: "#10151d",
+		backgroundColor: "#faf9f6",
 		webPreferences: {
 			preload: path.join(__dirname, "preload.cjs"),
 			contextIsolation: true,

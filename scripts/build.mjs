@@ -26,3 +26,4 @@ await build({
 	loader: { ".css": "css" },
 });
 await fs.copyFile("src/index.html", "dist/index.html");
+await fs.cp("src/assets", "dist/assets", { recursive: true });

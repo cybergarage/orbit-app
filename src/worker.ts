@@ -203,7 +203,11 @@ export class Worker {
 		this.child?.stdin.write(`${JSON.stringify(data)}\n`);
 	}
 	async rpc(e: any) {
-		if (this.stopping || this.controller.signal.aborted) return;
+		if (this.stopping || this.controller.signal.aborted) {
+			if (typeof e.id === "string" && /^[a-f0-9-]{36}$/.test(e.id))
+				this.send({ type: "rpc-result", id: e.id, error: "Worker cancelled" });
+			return;
+		}
 		if (
 			typeof e.id !== "string" ||
 			!/^[a-f0-9-]{36}$/.test(e.id) ||
@@ -261,6 +265,8 @@ export class Worker {
 			"{{.Names}}",
 		]);
 		if (names.trim()) throw Error("Worker cleanup not confirmed");
+		if (this.config.sessionId)
+			await verifySessionWriterReleased(this.core, this.config.sessionId);
 	}
 	private started = false;
 	private stopPromise?: Promise<void>;
@@ -281,7 +287,24 @@ export class Worker {
 		this.send({ type: "stop" });
 		if (!this.started) return;
 		try {
-			await command(dockerPath, ["stop", "-t", "3", this.name]).catch(() => {});
+			const child = this.child;
+			const exited =
+				!child ||
+				(await new Promise<boolean>((resolve) => {
+					const timer = setTimeout(() => {
+						child.removeListener("close", closed);
+						resolve(false);
+					}, 5000);
+					function closed() {
+						clearTimeout(timer);
+						resolve(true);
+					}
+					child.once("close", closed);
+				}));
+			if (!exited)
+				await command(dockerPath, ["stop", "-t", "3", this.name]).catch(
+					() => {},
+				);
 			const names = await command(dockerPath, [
 				"ps",
 				"-a",
@@ -319,4 +342,29 @@ export async function projectBytes(roots: string[]): Promise<number> {
 		if (size > 268435456) break;
 	}
 	return size;
+}
+
+export async function verifySessionWriterReleased(
+	core: string,
+	sessionId: string,
+) {
+	if (!/^[a-f0-9-]{36}$/.test(sessionId))
+		throw Error("Invalid session identity");
+	for (const suffix of ["owner", "guard"]) {
+		const file = path.join(
+			core,
+			"sessions",
+			".coordination",
+			`${sessionId}.${suffix}`,
+		);
+		try {
+			await fs.lstat(file);
+		} catch (error: any) {
+			if (error.code === "ENOENT") continue;
+			throw error;
+		}
+		throw Error(
+			"Worker stopped but Orbit writer ownership remains; preserve history and inspect recovery before retry",
+		);
+	}
 }

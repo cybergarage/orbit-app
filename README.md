@@ -35,7 +35,7 @@ npm run worker:build
 npm run dev
 ```
 
-Create a project and session, select a model, and submit a task. Review each requested write or command, then inspect its progress, results, and workspace files. Each project has its own app-managed workspace and persisted Orbit history.
+Create a project and session, select a model, and submit a task. Review each requested write or command, then inspect its progress, results, and workspace files. Projects use an app-managed workspace or an optional existing local directory. Conversations save their model choice and persisted Orbit history.
 
 ## Build a local app
 
@@ -48,10 +48,14 @@ The unsigned arm64 app still requires Docker, Ollama, and the locally built work
 
 ## Prototype features and limits
 
-- Project/session management, model and connection health, operation approvals, cancellation, saved history, and top-level artifact listing.
+- Home/new-chat, project creation and editing with optional directory/instructions, session rename/move, conversation model selection, runtime health, operation approvals, cancellation, saved history, and top-level artifact listing.
+- Scheduled definitions and a separate execution history with input, answer, operation/approval events and failure/interruption details.
+- Session moves preserve original Orbit storage and working directory. Changing a project directory affects new chats only; project guidance affects future tasks. Running or recovery-pending sessions cannot move. Existing state is backed up before the additive metadata migration.
 - Durable one-time, hourly, and every-24-hour schedules. **The app must be running.** After shutdown, at most one missed occurrence is considered; interrupted work is not automatically replayed. There is no background daemon.
 - Intended for trusted local workspaces. Workers have no network access and receive only their project's workspace/core mounts, without host credentials or the Docker socket. This is not a complete sandbox guarantee: approved Bash can modify the project's core records.
 - Per-file limits and a storage watchdog are **not a hard disk quota**; rapid writes can still consume host disk space.
 - Orbit's pinned `braces@3.0.3` dependency has an unpatched DoS advisory. Restricted search syntax mitigates the direct glob/grep path, but an approved Bash script can still invoke the vulnerable dependency.
+
+See [approved UI implementation and current validation](docs/approved-ui-implementation.md) for the latest local implementation status.
 
 See [verification and security limitations](docs/verification.md) for tested behavior, the advisory, and residual risks.

@@ -38,6 +38,11 @@ test("project create/edit cancel, session rename/move, outside/ESC dismissal and
 			.getByRole("button", { name: "+ New project", exact: true })
 			.click();
 		await page.getByLabel("Project name *").fill(name);
+		expect(
+			await page
+				.getByRole("button", { name: "Create project", exact: true })
+				.getAttribute("type"),
+		).toBe("submit");
 		await page
 			.getByRole("button", { name: "Create project", exact: true })
 			.click();
@@ -67,6 +72,19 @@ test("project create/edit cancel, session rename/move, outside/ESC dismissal and
 	// The click sits over Scheduled. The scrim must absorb it, without navigation.
 	await page.mouse.click(35, 112);
 	await expect(page.getByRole("menu")).toHaveCount(0);
+	await expect(
+		page.getByRole("heading", { name: "Session 1", exact: true }),
+	).toBeVisible();
+	await page
+		.getByRole("button", { name: "Session menu Session 1", exact: true })
+		.click();
+	await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+	await expect(
+		page.getByRole("dialog", { name: "Rename session" }),
+	).toBeVisible();
+	await page.screenshot({ path: "test-results/session-dialog.png" });
+	await page.keyboard.press("Escape");
+	await expect(page.getByRole("dialog")).toHaveCount(0);
 	await expect(
 		page.getByRole("heading", { name: "Session 1", exact: true }),
 	).toBeVisible();

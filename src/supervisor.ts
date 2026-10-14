@@ -50,7 +50,7 @@ export class Supervisor {
 			await command(dockerPath, ["info", "--format", "{{.ServerVersion}}"]);
 			if (a.containerName) {
 				if (!/^orbit-app-[a-f0-9-]{36}$/.test(a.containerName))
-					throw Error("Invalid saved worker identity");
+					throw new Error("Invalid saved worker identity");
 				const containers = await command(dockerPath, [
 					"ps",
 					"-a",
@@ -70,7 +70,7 @@ export class Supervisor {
 						owner.trim() !==
 						this.store.location(a.projectId, a.sessionId).workspace
 					)
-						throw Error("Worker ownership mismatch");
+						throw new Error("Worker ownership mismatch");
 					await command(dockerPath, ["rm", "-f", a.containerName]);
 				}
 			}
@@ -116,7 +116,7 @@ export class Supervisor {
 			const r = await fetch("http://127.0.0.1:11434/api/tags", {
 				signal: AbortSignal.timeout(3000),
 			});
-			if (!r.ok) throw Error(`Ollama ${r.status}`);
+			if (!r.ok) throw new Error(`Ollama ${r.status}`);
 			const data = await r.json();
 			health.ollama = true;
 			health.models = data.models
@@ -144,8 +144,8 @@ export class Supervisor {
 		const execution = this.store.state.executions?.find(
 			(r) => r.requestId === p.requestId,
 		);
-		if (this.closed) throw Error("App is closing");
-		if (this.admitted) throw Error("A worker is already active");
+		if (this.closed) throw new Error("App is closing");
+		if (this.admitted) throw new Error("A worker is already active");
 		const session = this.store.session(p.projectId, p.sessionId);
 		const prompt = text(p.prompt);
 		const model = text(p.model, 120);
@@ -155,24 +155,30 @@ export class Supervisor {
 				(e) => e.type === "submission" && e.data.requestId === p.requestId,
 			)
 		)
-			throw Error("Duplicate request");
+			throw new Error("Duplicate request");
 		this.admitted = true;
 		this.admittingSessionId = session.id;
 		const epoch = ++this.epoch;
 		try {
 			const health = await this.health();
 			if (epoch !== this.epoch || this.closed)
-				throw Error("Submission cancelled");
+				throw new Error("Submission cancelled");
 			if (this.recoveryBlocked)
-				throw Error(
+				throw new Error(
 					"Previous worker recovery is blocked; reconnect Docker first",
 				);
 			if (!health.docker || !health.ollama || !health.image)
-				throw Error(
+				throw new Error(
 					"Docker, worker image, and Ollama must be available. Check health and build the worker image.",
 				);
 			if (!health.models.includes(model))
-				throw Error("Select an installed tool-capable model");
+				throw new Error("Select an installed tool-capable model");
+			const workspace = await this.store.executionWorkspace(
+				p.projectId,
+				p.sessionId,
+			);
+			if (epoch !== this.epoch || this.closed)
+				throw new Error("Submission cancelled");
 			session.status = "starting";
 			session.model = model;
 			if (execution) execution.status = "starting";
@@ -188,10 +194,10 @@ export class Supervisor {
 			};
 			await this.publish();
 			if (epoch !== this.epoch || this.closed)
-				throw Error("Submission cancelled");
+				throw new Error("Submission cancelled");
 			let terminal = false;
 			const worker = this.factory(
-				this.store.location(p.projectId, p.sessionId).workspace,
+				workspace,
 				this.store.location(p.projectId, p.sessionId).core,
 				{
 					sessionId: p.sessionId,
@@ -244,7 +250,7 @@ export class Supervisor {
 				delete this.store.state.active;
 				session.status = "cancelled";
 				await this.publish();
-				throw Error("Submission cancelled");
+				throw new Error("Submission cancelled");
 			}
 			void worker
 				.start()
@@ -331,7 +337,7 @@ export class Supervisor {
 			["move-session", "select-model"].includes(commandName) &&
 			this.admittingSessionId === p.sessionId
 		)
-			throw Error("Running or recovery-pending sessions cannot be changed");
+			throw new Error("Running or recovery-pending sessions cannot be changed");
 		switch (commandName) {
 			case "snapshot":
 				return structuredClone(this.store.state);
@@ -383,7 +389,7 @@ export class Supervisor {
 			case "cancel":
 				return this.cancel();
 			case "approve": {
-				if (!this.worker) throw Error("No active worker");
+				if (!this.worker) throw new Error("No active worker");
 				this.worker.approve(p.id, p.approve);
 				const active = this.store.state.active;
 				if (active) {
@@ -423,7 +429,7 @@ export class Supervisor {
 					at <= Date.now() ||
 					![0, 3600000, 86400000].includes(interval)
 				)
-					throw Error("Invalid schedule");
+					throw new Error("Invalid schedule");
 				const s = {
 					id: randomUUID(),
 					projectId: p.projectId,
@@ -442,13 +448,13 @@ export class Supervisor {
 				const s = this.store.state.schedules.find(
 					(s) => s.id === identifier(p.id),
 				);
-				if (!s) throw Error("Schedule not found");
+				if (!s) throw new Error("Schedule not found");
 				s.enabled = false;
 				await this.publish();
 				return;
 			}
 			default:
-				throw Error("Unknown command");
+				throw new Error("Unknown command");
 		}
 	}
 	async tick(now = Date.now()) {

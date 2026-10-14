@@ -519,3 +519,95 @@ test("late model RPC after stop receives cancellation rather than hanging the wo
 		{ type: "rpc-result", id, error: "Worker cancelled" },
 	]);
 });
+
+test("external workspaces require private user-owned paths and are revalidated before execution", async () => {
+	const root = await directory(),
+		store = new Store(root);
+	await store.init();
+	const external = await directory();
+	assert.equal(await store.directory(external), await fs.realpath(external));
+	const project = await store.createProject("Private", external),
+		session = await store.createSession(project.id);
+	assert.equal(
+		await store.executionWorkspace(project.id, session.id),
+		await fs.realpath(external),
+	);
+	await fs.chmod(external, 0o777);
+	await assert.rejects(store.directory(external), /not group\/world writable/);
+	await assert.rejects(
+		store.executionWorkspace(project.id, session.id),
+		/not group\/world writable/,
+	);
+	await fs.chmod(external, 0o700);
+	const child = path.join(external, "child");
+	await fs.mkdir(child, { mode: 0o700 });
+	await fs.chmod(external, 0o770);
+	await assert.rejects(store.directory(child), /not group\/world writable/);
+	await fs.chmod(external, 0o700);
+	const alias = path.join(root, "alias");
+	await fs.symlink(external, alias);
+	assert.equal(await store.directory(alias), await fs.realpath(external));
+	const commaDirectory = path.join(root, "comma,directory");
+	await fs.mkdir(commaDirectory, { mode: 0o700 });
+	const commaAlias = path.join(root, "comma-alias");
+	await fs.symlink(commaDirectory, commaAlias);
+	await assert.rejects(
+		store.directory(commaAlias),
+		/Canonical working directory/,
+	);
+	const moved = `${external}-moved`;
+	await fs.rename(external, moved);
+	await fs.symlink(moved, external);
+	await assert.rejects(
+		store.executionWorkspace(project.id, session.id),
+		/identity changed/,
+	);
+	const defaultProject = await store.createProject("Managed"),
+		defaultSession = await store.createSession(defaultProject.id);
+	assert.equal(
+		await store.executionWorkspace(defaultProject.id, defaultSession.id),
+		store.workspace(defaultProject.id),
+	);
+	await fs.chmod(store.workspace(defaultProject.id), 0o777);
+	await assert.rejects(
+		store.executionWorkspace(defaultProject.id, defaultSession.id),
+		/not group\/world writable/,
+	);
+});
+
+test("submission never reaches Docker admission after an external workspace becomes shared writable", async () => {
+	let admitted = 0;
+	const supervisor = new Supervisor(
+		await directory(),
+		() => {},
+		() => {
+			admitted++;
+			throw new Error("Unexpected worker admission");
+		},
+	);
+	await supervisor.init();
+	supervisor.health = async () => ({
+		docker: true,
+		ollama: true,
+		image: true,
+		models: ["fixture"],
+		detail: [],
+	});
+	const external = await directory(),
+		project = await supervisor.store.createProject("External", external),
+		session = await supervisor.store.createSession(project.id);
+	await fs.chmod(external, 0o777);
+	await assert.rejects(
+		supervisor.submit({
+			projectId: project.id,
+			sessionId: session.id,
+			prompt: "Task",
+			model: "fixture",
+			requestId: randomUUID(),
+		}),
+		/not group\/world writable/,
+	);
+	assert.equal(admitted, 0);
+	assert.equal(supervisor.store.state.active, undefined);
+	assert.equal(session.status, "idle");
+});

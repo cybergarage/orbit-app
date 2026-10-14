@@ -5,12 +5,12 @@ import { randomUUID } from "node:crypto";
 import type { Snapshot, Project, DesktopSession } from "./types";
 export function identifier(value: unknown): string {
 	if (typeof value !== "string" || !/^[a-f0-9-]{36}$/.test(value))
-		throw Error("Invalid identifier");
+		throw new Error("Invalid identifier");
 	return value;
 }
 export function text(value: unknown, max = 12000): string {
 	if (typeof value !== "string" || !value.trim() || value.length > max)
-		throw Error("Invalid text");
+		throw new Error("Invalid text");
 	return value.trim();
 }
 export class Store {
@@ -81,14 +81,14 @@ export class Store {
 	}
 	project(id: unknown): Project {
 		const p = this.state.projects.find((p) => p.id === identifier(id));
-		if (!p) throw Error("Project not found");
+		if (!p) throw new Error("Project not found");
 		return p;
 	}
 	session(projectId: unknown, sessionId: unknown): DesktopSession {
 		const s = this.project(projectId).sessions.find(
 			(s) => s.id === identifier(sessionId),
 		);
-		if (!s) throw Error("Session not found");
+		if (!s) throw new Error("Session not found");
 		return s;
 	}
 	async createProject(
@@ -129,14 +129,18 @@ export class Store {
 		if (value === undefined || value === "") return undefined;
 		const input = text(value, 4096);
 		if (!path.isAbsolute(input) || /[,\n\r]/.test(input))
-			throw Error("Use an absolute local directory without commas or newlines");
+			throw new Error(
+				"Use an absolute local directory without commas or newlines",
+			);
 		const resolved = await fs.realpath(input);
+		if (/[,\n\r]/.test(resolved))
+			throw new Error(
+				"Canonical working directory must not contain commas or newlines",
+			);
 		const home = await fs.realpath(os.homedir());
 		const temporary = await fs.realpath(os.tmpdir());
 		if (
 			(!resolved.startsWith(`${home}${path.sep}`) &&
-				!resolved.startsWith("/private/tmp/") &&
-				!resolved.startsWith("/tmp/") &&
 				!resolved.startsWith(`${temporary}${path.sep}`)) ||
 			["/", home].includes(resolved) ||
 			resolved
@@ -153,12 +157,60 @@ export class Store {
 					].includes(part),
 				)
 		)
-			throw Error(
+			throw new Error(
 				"Home, system and credential directories cannot be worker workspaces",
 			);
-		if (!(await fs.stat(resolved)).isDirectory())
-			throw Error("Working directory must exist");
+		const anchor = resolved.startsWith(`${home}${path.sep}`) ? home : temporary;
+		await this.assertPrivateDirectoryTree(resolved, anchor);
 		return resolved;
+	}
+	private async assertPrivateDirectoryTree(directory: string, anchor: string) {
+		const uid = process.getuid?.();
+		if (uid === undefined)
+			throw new Error(
+				"Directory ownership validation is unavailable on this platform",
+			);
+		const anchorStat = await fs.lstat(anchor);
+		if ((anchorStat.mode & 0o022) !== 0 && (anchorStat.mode & 0o1000) === 0)
+			throw new Error(
+				"Working directory anchor must not allow shared writes without sticky protection",
+			);
+		const entries: string[] = [];
+		for (
+			let current = directory;
+			current !== anchor;
+			current = path.dirname(current)
+		)
+			entries.push(current);
+		const stats = await Promise.all(entries.map((entry) => fs.lstat(entry)));
+		for (const stat of stats) {
+			if (!stat.isDirectory() || stat.isSymbolicLink())
+				throw new Error("Working directory must remain an existing directory");
+			if (stat.uid !== uid || (stat.mode & 0o022) !== 0)
+				throw new Error(
+					"Working directory and its parents must be user-owned and not group/world writable",
+				);
+		}
+	}
+	async executionWorkspace(projectId: unknown, sessionId: unknown) {
+		const session = this.session(projectId, sessionId);
+		const location = this.location(projectId, sessionId);
+		const managed = this.workspace(
+			session.storageProjectId ?? this.project(projectId).id,
+		);
+		if (location.workspace === managed) {
+			await this.assertPrivateDirectoryTree(
+				await fs.realpath(managed),
+				await fs.realpath(this.root),
+			);
+			return location.workspace;
+		}
+		const canonical = await this.directory(location.workspace);
+		if (canonical !== location.workspace)
+			throw new Error(
+				"Working directory identity changed; inspect this session before running",
+			);
+		return canonical;
 	}
 	instructions(value: unknown) {
 		return value === undefined || value === "" ? undefined : text(value);
@@ -175,7 +227,7 @@ export class Store {
 				"recovery-blocked",
 			].includes(s.status)
 		)
-			throw Error(
+			throw new Error(
 				"Running or recovery-pending sessions cannot be moved or renamed",
 			);
 		return s;

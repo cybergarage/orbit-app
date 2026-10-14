@@ -1,4 +1,5 @@
 export interface EventRecord {
+	requestId?: string;
 	id?: string;
 	type: string;
 	at: string;

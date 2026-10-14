@@ -106,6 +106,25 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 		expect(
 			state.projects.find((p: any) => p.id === source.id).sessions[0].status,
 		).toBe("cancelled");
+		const cancelledSession = state.projects.find((p: any) => p.id === source.id)
+			.sessions[0];
+		const cancelledRequest = cancelledSession.events.filter(
+			(event: any) => event.type === "submission",
+		)[1].data.requestId;
+		const intent = cancelledSession.events.find(
+			(event: any) =>
+				event.type === "cancel-requested" &&
+				event.requestId === cancelledRequest,
+		);
+		expect(intent.data.effective).toBe(true);
+		summary.cancelledDisplayStatus = cancelledSession.status;
+		summary.rawCancelledOutcome = cancelledSession.events.findLast(
+			(event: any) =>
+				event.type === "result" && event.requestId === cancelledRequest,
+		)?.data.runtime.outcome;
+		await expect(
+			page.getByText(/cancelled · Working directory:/),
+		).toBeVisible();
 		expect(
 			(
 				await command(dockerPath, [
@@ -226,5 +245,11 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 		throw error;
 	} finally {
 		await app.close();
+		await fs.rm(root, { recursive: true, force: true });
+		summary.fixtureRemoved = true;
+		await fs.writeFile(
+			"test-results/live-approved.json",
+			JSON.stringify(summary, null, 2),
+		);
 	}
 });

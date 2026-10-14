@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -12,8 +12,18 @@ import {
 	verifySessionWriterReleased,
 } from "../src/worker";
 import { Supervisor } from "../src/supervisor";
+const temporaryDirectories: string[] = [];
+after(async () => {
+	await Promise.all(
+		temporaryDirectories.map((root) =>
+			fs.rm(root, { recursive: true, force: true }),
+		),
+	);
+});
 async function directory() {
-	return fs.mkdtemp(path.join(os.tmpdir(), "orbit-app-test-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-app-test-"));
+	temporaryDirectories.push(root);
+	return root;
 }
 async function waitFor(predicate: () => boolean) {
 	const deadline = Date.now() + 10000;
@@ -556,6 +566,7 @@ test("external workspaces require private user-owned paths and are revalidated b
 		/Canonical working directory/,
 	);
 	const moved = `${external}-moved`;
+	temporaryDirectories.push(moved);
 	await fs.rename(external, moved);
 	await fs.symlink(moved, external);
 	await assert.rejects(
@@ -610,4 +621,247 @@ test("submission never reaches Docker admission after an external workspace beco
 	assert.equal(admitted, 0);
 	assert.equal(supervisor.store.state.active, undefined);
 	assert.equal(session.status, "idle");
+});
+
+async function cancellationFixture() {
+	const emitters: Array<(event: any) => void> = [],
+		finishes: Array<() => void> = [];
+	const supervisor = new Supervisor(
+		await directory(),
+		() => {},
+		(_workspace, _core, _config, emit) => {
+			const index = emitters.push(emit) - 1;
+			return {
+				name: `orbit-app-${randomUUID()}`,
+				start: () =>
+					new Promise<void>((resolve) => {
+						finishes[index] = resolve;
+					}),
+				stop: async () => {},
+				confirmGone: async () => {},
+			} as unknown as Worker;
+		},
+	);
+	await supervisor.init();
+	supervisor.health = async () => ({
+		docker: true,
+		ollama: true,
+		image: true,
+		models: ["fixture"],
+		detail: [],
+	});
+	const project = await supervisor.store.createProject("Cancellation"),
+		session = await supervisor.store.createSession(project.id);
+	const submit = async () => {
+		const requestId = randomUUID();
+		await supervisor.submit({
+			projectId: project.id,
+			sessionId: session.id,
+			requestId,
+			prompt: "Task",
+			model: "fixture",
+		});
+		return requestId;
+	};
+	const finish = async (index = 0) => {
+		finishes[index]();
+		await waitFor(() => !supervisor.worker);
+	};
+	return { supervisor, project, session, emitters, submit, finish };
+}
+
+test("requested cancellation classifies a cancelled model failure without rewriting the raw outcome", async () => {
+	const f = await cancellationFixture(),
+		requestId = await f.submit();
+	await f.supervisor.cancel();
+	await f.supervisor.cancel();
+	f.emitters[0]({
+		type: "model-cancelled",
+		data: { reason: "host cancellation" },
+	});
+	f.emitters[0]({ type: "run", data: { phase: "running" } });
+	assert.equal(f.session.status, "cancelling");
+	f.emitters[0]({
+		type: "result",
+		data: {
+			answer: "",
+			runtime: { outcome: "failed", reason: "runtime-failed" },
+		},
+	});
+	await f.finish();
+	assert.equal(f.session.status, "cancelled");
+	assert.equal(
+		f.session.events.filter((e) => e.type === "cancel-requested").length,
+		1,
+	);
+	assert.equal(
+		f.session.events.find((e) => e.type === "cancel-requested")?.data.effective,
+		true,
+	);
+	assert.equal(
+		f.session.events.find((e) => e.type === "result")?.data.runtime.outcome,
+		"failed",
+	);
+	assert.equal(
+		f.session.events.find((e) => e.type === "result")?.requestId,
+		requestId,
+	);
+	const restored = new Store(f.supervisor.store.root);
+	await restored.init();
+	assert.equal(
+		restored.session(f.project.id, f.session.id).status,
+		"cancelled",
+	);
+});
+
+test("independent failure before or after cancellation stays failed", async () => {
+	for (const earlier of [true, false]) {
+		const f = await cancellationFixture();
+		await f.submit();
+		if (earlier) f.emitters[0]({ type: "error", data: "Disk failed" });
+		await f.supervisor.cancel();
+		if (!earlier) {
+			f.emitters[0]({ type: "model-cancelled", data: {} });
+			f.emitters[0]({ type: "error", data: "Disk failed" });
+		}
+		f.emitters[0]({
+			type: "result",
+			data: {
+				answer: "",
+				runtime: { outcome: "failed", reason: "disk error" },
+			},
+		});
+		await f.finish();
+		assert.equal(f.session.status, "failed");
+		assert.ok(f.session.events.some((e) => e.data === "Disk failed"));
+	}
+});
+
+test("a terminal result wins a late cancellation and success racing cancellation remains completed", async () => {
+	for (const earlier of [true, false]) {
+		const f = await cancellationFixture();
+		await f.submit();
+		const result = {
+			type: "result",
+			data: {
+				answer: "DONE",
+				runtime: { outcome: "completed", reason: "completed" },
+			},
+		};
+		if (earlier) f.emitters[0](result);
+		await f.supervisor.cancel();
+		if (!earlier) f.emitters[0](result);
+		await f.finish();
+		assert.equal(f.session.status, "completed");
+		assert.equal(f.session.answer, "DONE");
+		assert.equal(
+			f.session.events.find((e) => e.type === "cancel-requested")?.data
+				.effective,
+			!earlier,
+		);
+	}
+});
+
+test("late events from a cancelled worker cannot replace the next request's state or answer", async () => {
+	const f = await cancellationFixture(),
+		first = await f.submit();
+	await f.supervisor.cancel();
+	f.emitters[0]({ type: "model-cancelled", data: {} });
+	f.emitters[0]({
+		type: "result",
+		data: {
+			answer: "",
+			runtime: { outcome: "failed", reason: "runtime-failed" },
+		},
+	});
+	await f.finish();
+	const second = await f.submit();
+	f.emitters[0]({ type: "approval", data: { id: "stale" } });
+	f.emitters[0]({
+		type: "result",
+		data: { answer: "STALE", runtime: { outcome: "failed" } },
+	});
+	assert.equal(f.session.status, "starting");
+	assert.notEqual(f.session.answer, "STALE");
+	f.emitters[1]({
+		type: "result",
+		data: {
+			answer: "FRESH",
+			runtime: { outcome: "completed", reason: "completed" },
+		},
+	});
+	await f.finish(1);
+	assert.equal(f.session.status, "completed");
+	assert.equal(f.session.answer, "FRESH");
+	assert.ok(
+		f.session.events.some(
+			(e) => e.requestId === first && e.data?.answer === "STALE",
+		),
+	);
+	assert.ok(
+		f.session.events.some(
+			(e) => e.requestId === second && e.data?.answer === "FRESH",
+		),
+	);
+});
+
+test("budget and incomplete terminal outcomes are not hidden by cancellation", async () => {
+	for (const outcome of ["budget-exceeded", "incomplete"]) {
+		const f = await cancellationFixture();
+		await f.submit();
+		await f.supervisor.cancel();
+		f.emitters[0]({ type: "model-cancelled", data: {} });
+		f.emitters[0]({
+			type: "result",
+			data: { answer: "partial", runtime: { outcome, reason: outcome } },
+		});
+		await f.finish();
+		assert.equal(f.session.status, outcome);
+		assert.equal(
+			f.session.events.find((e) => e.type === "result")?.data.runtime.outcome,
+			outcome,
+		);
+	}
+});
+
+test("scheduled cancellation during health retains intent and cancellation classification", async () => {
+	let release: () => void = () => {};
+	let entered = false;
+	const supervisor = new Supervisor(await directory(), () => {});
+	await supervisor.init();
+	const project = await supervisor.store.createProject(
+			"Scheduled cancellation",
+		),
+		session = await supervisor.store.createSession(project.id);
+	await supervisor.dispatch("schedule", {
+		projectId: project.id,
+		sessionId: session.id,
+		prompt: "Task",
+		model: "fixture",
+		nextAt: Date.now() + 60000,
+		intervalMs: 0,
+	});
+	supervisor.health = async () => {
+		entered = true;
+		await new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		return {
+			docker: true,
+			ollama: true,
+			image: true,
+			models: ["fixture"],
+			detail: [],
+		};
+	};
+	const ticking = supervisor.tick(Date.now() + 120000);
+	await waitFor(() => entered);
+	// Cancel only once admission has reached the pending health call.
+	await supervisor.cancel();
+	release();
+	await ticking;
+	const run = supervisor.store.state.executions?.[0];
+	assert.equal(run?.status, "cancelled");
+	assert.ok(run?.events.some((e) => e.type === "error"));
+	assert.ok(run?.events.some((e) => e.type === "cancel-requested"));
 });

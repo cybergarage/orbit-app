@@ -8,11 +8,37 @@ import {
 	image,
 	verifySessionWriterReleased,
 } from "./worker";
-import type { Health, Snapshot } from "./types";
+import type { Health, Snapshot, Execution, DesktopSession } from "./types";
+interface RunControl {
+	session: DesktopSession;
+	projectId: string;
+	sessionId: string;
+	requestId: string;
+	execution?: Execution;
+	rawStatus: string;
+	terminal: boolean;
+	finished: boolean;
+	modelCancelled: boolean;
+	independentFailure: boolean;
+	cancellation?: { at: string; effective: boolean };
+}
+function displayedStatus(run: RunControl, settled = false) {
+	if (
+		!run.cancellation?.effective ||
+		run.independentFailure ||
+		run.rawStatus === "completed"
+	)
+		return run.rawStatus;
+	if (run.rawStatus === "failed" && !run.modelCancelled) return "failed";
+	if (run.terminal && !["failed", "cancelled"].includes(run.rawStatus))
+		return run.rawStatus;
+	return settled ? "cancelled" : "cancelling";
+}
 export class Supervisor {
 	readonly store: Store;
 	worker?: Worker;
 	private admitted = false;
+	private currentRun?: RunControl;
 	private admittingSessionId?: string;
 	private epoch = 0;
 	private closed = false;
@@ -159,6 +185,19 @@ export class Supervisor {
 		this.admitted = true;
 		this.admittingSessionId = session.id;
 		const epoch = ++this.epoch;
+		const run: RunControl = {
+			session,
+			projectId: p.projectId,
+			sessionId: p.sessionId,
+			requestId: p.requestId,
+			execution,
+			rawStatus: "starting",
+			terminal: false,
+			finished: false,
+			modelCancelled: false,
+			independentFailure: false,
+		};
+		this.currentRun = run;
 		try {
 			const health = await this.health();
 			if (epoch !== this.epoch || this.closed)
@@ -195,7 +234,6 @@ export class Supervisor {
 			await this.publish();
 			if (epoch !== this.epoch || this.closed)
 				throw new Error("Submission cancelled");
-			let terminal = false;
 			const worker = this.factory(
 				workspace,
 				this.store.location(p.projectId, p.sessionId).core,
@@ -207,38 +245,7 @@ export class Supervisor {
 						: prompt,
 					model,
 				},
-				(e) => {
-					if (execution)
-						execution.events.push({
-							id: randomUUID(),
-							type: e.type,
-							at: new Date().toISOString(),
-							data: e.data,
-						});
-					session.events.push({
-						id: randomUUID(),
-						type: e.type,
-						at: new Date().toISOString(),
-						data: e.data,
-					});
-					if (e.type === "approval") session.status = "awaiting-approval";
-					if (e.type === "run") session.status = e.data.phase;
-					if (e.type === "result") {
-						terminal = true;
-						session.answer = e.data.answer;
-						session.status = e.data.runtime.outcome;
-					}
-					if (e.type === "error") session.status = "failed";
-					if (execution) {
-						if (typeof e.data?.runId === "string")
-							execution.orbitRunId = e.data.runId;
-						if (typeof e.data?.runtime?.runId === "string")
-							execution.orbitRunId = e.data.runtime.runId;
-						execution.status = session.status;
-						if (e.type === "result") execution.answer = e.data.answer;
-					}
-					void this.publish().catch(() => {});
-				},
+				(e) => this.receiveEvent(run, e),
 			);
 			this.worker = worker;
 			if (this.store.state.active)
@@ -255,24 +262,16 @@ export class Supervisor {
 			void worker
 				.start()
 				.catch((e) => {
-					session.status = "failed";
-					execution?.events.push({
-						id: randomUUID(),
-						type: "error",
-						at: new Date().toISOString(),
-						data: String(e),
-					});
-					session.events.push({
-						id: randomUUID(),
-						type: "error",
-						at: new Date().toISOString(),
-						data: String(e),
-					});
+					this.receiveEvent(run, { type: "error", data: String(e) });
 				})
 				.finally(async () => {
-					if (!terminal && !["failed", "cancelling"].includes(session.status))
-						session.status = "interrupted";
-					if (session.status === "cancelling") session.status = "cancelled";
+					if (
+						!run.terminal &&
+						!["failed", "cancelling"].includes(session.status)
+					)
+						run.rawStatus = "interrupted";
+					session.status = displayedStatus(run, true);
+					run.finished = true;
 					try {
 						await worker.confirmGone();
 						if (this.store.state.active?.containerName === worker.name)
@@ -284,7 +283,7 @@ export class Supervisor {
 					if (execution) {
 						execution.status = session.status;
 						execution.endedAt = Date.now();
-						if (!terminal)
+						if (!run.terminal)
 							execution.events.push({
 								id: randomUUID(),
 								type: "ended",
@@ -296,6 +295,7 @@ export class Supervisor {
 					if (this.worker === worker) this.worker = undefined;
 					this.admitted = false;
 					this.admittingSessionId = undefined;
+					if (this.currentRun === run) this.currentRun = undefined;
 				});
 			return { accepted: true };
 		} catch (e) {
@@ -320,18 +320,84 @@ export class Supervisor {
 			} finally {
 				this.admitted = false;
 				this.admittingSessionId = undefined;
+				if (this.currentRun === run) this.currentRun = undefined;
 			}
 			throw e;
 		}
 	}
 
+	private receiveEvent(run: RunControl, event: any) {
+		const session = run.session;
+		const record = {
+			id: randomUUID(),
+			requestId: run.requestId,
+			type: event.type,
+			at: new Date().toISOString(),
+			data: event.data,
+		};
+		session.events.push(record);
+		run.execution?.events.push(record);
+		if (run.finished || this.currentRun !== run) {
+			void this.publish().catch(() => {});
+			return;
+		}
+		this.updateRun(run, event);
+		session.status = displayedStatus(run);
+		if (event.type === "result") session.answer = event.data.answer;
+		if (run.execution) {
+			run.execution.status = session.status;
+			const orbitRunId = event.data?.runId ?? event.data?.runtime?.runId;
+			if (typeof orbitRunId === "string") run.execution.orbitRunId = orbitRunId;
+			if (event.type === "result") run.execution.answer = event.data.answer;
+		}
+		void this.publish().catch(() => {});
+	}
+	private updateRun(run: RunControl, event: any) {
+		if (event.type === "model-cancelled") run.modelCancelled = true;
+		if (event.type === "error") {
+			run.rawStatus = "failed";
+			const cancelled = /^Error: (Worker cancelled|Cancelled|Stopped)$/.test(
+				String(event.data),
+			);
+			if (cancelled) run.modelCancelled = true;
+			else run.independentFailure = true;
+		}
+		if (event.type === "approval" && !run.terminal)
+			run.rawStatus = "awaiting-approval";
+		if (event.type === "run" && !run.terminal) run.rawStatus = event.data.phase;
+		const result =
+			event.type === "result" ? event.data.runtime : event.data?.result;
+		if (result?.outcome) {
+			run.terminal = true;
+			run.rawStatus = result.outcome;
+		}
+	}
 	async cancel() {
-		++this.epoch;
-		const a = this.store.state.active;
-		if (a) this.store.session(a.projectId, a.sessionId).status = "cancelling";
-		await this.publish();
+		const run = this.currentRun;
+		if (!run) return;
+		if (!run.cancellation) {
+			run.cancellation = {
+				at: new Date().toISOString(),
+				effective: !run.terminal && !run.independentFailure,
+			};
+			if (run.cancellation.effective) ++this.epoch;
+			const record = {
+				id: randomUUID(),
+				requestId: run.requestId,
+				type: "cancel-requested",
+				at: run.cancellation.at,
+				data: { requestId: run.requestId, ...run.cancellation },
+			};
+			const session = run.session;
+			session.events.push(record);
+			run.execution?.events.push(record);
+			session.status = displayedStatus(run);
+			if (run.execution) run.execution.status = session.status;
+			await this.publish();
+		}
 		await this.worker?.stop();
 	}
+
 	async dispatch(commandName: string, p: any = {}) {
 		if (
 			["move-session", "select-model"].includes(commandName) &&
@@ -491,7 +557,15 @@ export class Supervisor {
 		try {
 			await this.submit({ ...s, requestId: execution.requestId });
 		} catch (e) {
-			execution.status = "failed";
+			const session = this.store.session(s.projectId, s.sessionId);
+			const cancelled =
+				execution.events.some(
+					(event) =>
+						event.type === "cancel-requested" &&
+						event.requestId === execution.requestId &&
+						event.data.effective,
+				) && session.status === "cancelled";
+			execution.status = cancelled ? "cancelled" : "failed";
 			Object.assign(execution, { endedAt: Date.now() });
 			execution.events.push({
 				id: randomUUID(),
@@ -499,7 +573,6 @@ export class Supervisor {
 				at: new Date().toISOString(),
 				data: String(e),
 			});
-			const session = this.store.session(s.projectId, s.sessionId);
 			session.events.push({
 				id: randomUUID(),
 				type: "schedule-error",

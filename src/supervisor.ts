@@ -1,12 +1,19 @@
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { Store, text, identifier } from "./store";
-import { Worker, command, dockerPath, image } from "./worker";
+import {
+	Worker,
+	command,
+	dockerPath,
+	image,
+	verifySessionWriterReleased,
+} from "./worker";
 import type { Health, Snapshot } from "./types";
 export class Supervisor {
 	readonly store: Store;
 	worker?: Worker;
 	private admitted = false;
+	private admittingSessionId?: string;
 	private epoch = 0;
 	private closed = false;
 	private recoveryBlocked = false;
@@ -43,7 +50,7 @@ export class Supervisor {
 			await command(dockerPath, ["info", "--format", "{{.ServerVersion}}"]);
 			if (a.containerName) {
 				if (!/^orbit-app-[a-f0-9-]{36}$/.test(a.containerName))
-					throw Error("Invalid saved worker identity");
+					throw new Error("Invalid saved worker identity");
 				const containers = await command(dockerPath, [
 					"ps",
 					"-a",
@@ -59,20 +66,30 @@ export class Supervisor {
 						'{{index .Config.Labels "org.cybergarage.orbit-app.workspace"}}',
 						a.containerName,
 					]);
-					if (owner.trim() !== this.store.workspace(a.projectId))
-						throw Error("Worker ownership mismatch");
+					if (
+						owner.trim() !==
+						this.store.location(a.projectId, a.sessionId).workspace
+					)
+						throw new Error("Worker ownership mismatch");
 					await command(dockerPath, ["rm", "-f", a.containerName]);
 				}
 			}
+			await verifySessionWriterReleased(
+				this.store.location(a.projectId, a.sessionId).core,
+				a.sessionId,
+			);
 			this.store.session(a.projectId, a.sessionId).status = "interrupted";
 			if (this.store.state.active === a) delete this.store.state.active;
 			this.recoveryBlocked = false;
 			await this.publish();
 		} catch {
+			this.store.session(a.projectId, a.sessionId).status = "recovery-blocked";
+			await this.publish();
 			/* Keep durable identity and block new work until Docker recovers. */
 		}
 	}
 	async publish() {
+		this.store.state.recoveryBlocked = this.recoveryBlocked;
 		this.changed(structuredClone(this.store.state));
 		this.saveQueue = this.saveQueue.then(() => this.store.save());
 		await this.saveQueue;
@@ -80,6 +97,7 @@ export class Supervisor {
 	async health(): Promise<Health> {
 		if (this.recoveryBlocked) await this.reconcile();
 		const health: Health = {
+			checkedAt: Date.now(),
 			docker: false,
 			ollama: false,
 			image: false,
@@ -98,7 +116,7 @@ export class Supervisor {
 			const r = await fetch("http://127.0.0.1:11434/api/tags", {
 				signal: AbortSignal.timeout(3000),
 			});
-			if (!r.ok) throw Error(`Ollama ${r.status}`);
+			if (!r.ok) throw new Error(`Ollama ${r.status}`);
 			const data = await r.json();
 			health.ollama = true;
 			health.models = data.models
@@ -123,8 +141,11 @@ export class Supervisor {
 		return health;
 	}
 	async submit(p: any) {
-		if (this.closed) throw Error("App is closing");
-		if (this.admitted) throw Error("A worker is already active");
+		const execution = this.store.state.executions?.find(
+			(r) => r.requestId === p.requestId,
+		);
+		if (this.closed) throw new Error("App is closing");
+		if (this.admitted) throw new Error("A worker is already active");
 		const session = this.store.session(p.projectId, p.sessionId);
 		const prompt = text(p.prompt);
 		const model = text(p.model, 120);
@@ -134,24 +155,33 @@ export class Supervisor {
 				(e) => e.type === "submission" && e.data.requestId === p.requestId,
 			)
 		)
-			throw Error("Duplicate request");
+			throw new Error("Duplicate request");
 		this.admitted = true;
+		this.admittingSessionId = session.id;
 		const epoch = ++this.epoch;
 		try {
 			const health = await this.health();
 			if (epoch !== this.epoch || this.closed)
-				throw Error("Submission cancelled");
+				throw new Error("Submission cancelled");
 			if (this.recoveryBlocked)
-				throw Error(
+				throw new Error(
 					"Previous worker recovery is blocked; reconnect Docker first",
 				);
 			if (!health.docker || !health.ollama || !health.image)
-				throw Error(
+				throw new Error(
 					"Docker, worker image, and Ollama must be available. Check health and build the worker image.",
 				);
 			if (!health.models.includes(model))
-				throw Error("Select an installed tool-capable model");
+				throw new Error("Select an installed tool-capable model");
+			const workspace = await this.store.executionWorkspace(
+				p.projectId,
+				p.sessionId,
+			);
+			if (epoch !== this.epoch || this.closed)
+				throw new Error("Submission cancelled");
 			session.status = "starting";
+			session.model = model;
+			if (execution) execution.status = "starting";
 			session.events.push({
 				id: randomUUID(),
 				type: "submission",
@@ -164,14 +194,27 @@ export class Supervisor {
 			};
 			await this.publish();
 			if (epoch !== this.epoch || this.closed)
-				throw Error("Submission cancelled");
+				throw new Error("Submission cancelled");
 			let terminal = false;
 			const worker = this.factory(
-				this.store.workspace(p.projectId),
-				this.store.core(p.projectId),
-				{ sessionId: p.sessionId, requestId: p.requestId, prompt, model },
+				workspace,
+				this.store.location(p.projectId, p.sessionId).core,
+				{
+					sessionId: p.sessionId,
+					requestId: p.requestId,
+					prompt: this.store.project(p.projectId).instructions
+						? `Project guidance (follow applicable workspace ORBIT.md / AGENTS.md instructions):\n${this.store.project(p.projectId).instructions}\n\nUser task:\n${prompt}`
+						: prompt,
+					model,
+				},
 				(e) => {
-					if (session.events.length >= 2000) session.events.shift();
+					if (execution)
+						execution.events.push({
+							id: randomUUID(),
+							type: e.type,
+							at: new Date().toISOString(),
+							data: e.data,
+						});
 					session.events.push({
 						id: randomUUID(),
 						type: e.type,
@@ -186,6 +229,14 @@ export class Supervisor {
 						session.status = e.data.runtime.outcome;
 					}
 					if (e.type === "error") session.status = "failed";
+					if (execution) {
+						if (typeof e.data?.runId === "string")
+							execution.orbitRunId = e.data.runId;
+						if (typeof e.data?.runtime?.runId === "string")
+							execution.orbitRunId = e.data.runtime.runId;
+						execution.status = session.status;
+						if (e.type === "result") execution.answer = e.data.answer;
+					}
 					void this.publish().catch(() => {});
 				},
 			);
@@ -199,12 +250,18 @@ export class Supervisor {
 				delete this.store.state.active;
 				session.status = "cancelled";
 				await this.publish();
-				throw Error("Submission cancelled");
+				throw new Error("Submission cancelled");
 			}
 			void worker
 				.start()
 				.catch((e) => {
 					session.status = "failed";
+					execution?.events.push({
+						id: randomUUID(),
+						type: "error",
+						at: new Date().toISOString(),
+						data: String(e),
+					});
 					session.events.push({
 						id: randomUUID(),
 						type: "error",
@@ -224,9 +281,21 @@ export class Supervisor {
 						this.recoveryBlocked = true;
 						session.status = "recovery-blocked";
 					}
+					if (execution) {
+						execution.status = session.status;
+						execution.endedAt = Date.now();
+						if (!terminal)
+							execution.events.push({
+								id: randomUUID(),
+								type: "ended",
+								at: new Date().toISOString(),
+								data: session.status,
+							});
+					}
 					await this.publish();
 					if (this.worker === worker) this.worker = undefined;
 					this.admitted = false;
+					this.admittingSessionId = undefined;
 				});
 			return { accepted: true };
 		} catch (e) {
@@ -250,6 +319,7 @@ export class Supervisor {
 				}
 			} finally {
 				this.admitted = false;
+				this.admittingSessionId = undefined;
 			}
 			throw e;
 		}
@@ -263,32 +333,89 @@ export class Supervisor {
 		await this.worker?.stop();
 	}
 	async dispatch(commandName: string, p: any = {}) {
+		if (
+			["move-session", "select-model"].includes(commandName) &&
+			this.admittingSessionId === p.sessionId
+		)
+			throw new Error("Running or recovery-pending sessions cannot be changed");
 		switch (commandName) {
 			case "snapshot":
 				return structuredClone(this.store.state);
 			case "health":
 				return this.health();
 			case "create-project": {
-				const result = await this.store.createProject(p.name);
+				const result = await this.store.createProject(
+					p.name,
+					p.directory,
+					p.instructions,
+				);
 				await this.publish();
 				return result;
 			}
-			case "create-session": {
-				const result = await this.store.createSession(p.projectId);
+			case "edit-project": {
+				const result = await this.store.editProject(p);
 				await this.publish();
 				return result;
+			}
+			case "select-model": {
+				const session = this.store.assertMovable(p.projectId, p.sessionId);
+				session.model = text(p.model, 120);
+				await this.publish();
+				return session;
+			}
+			case "rename-session": {
+				const result = await this.store.renameSession(p);
+				await this.publish();
+				return result;
+			}
+			case "move-session": {
+				const target = p.targetProjectId || (await this.store.chats()).id;
+				const result = await this.store.moveSession({
+					...p,
+					targetProjectId: target,
+				});
+				await this.publish();
+				return { ...result, projectId: target };
+			}
+			case "create-session": {
+				if (!p.projectId)
+					p = { ...p, projectId: (await this.store.chats()).id };
+				const result = await this.store.createSession(p.projectId);
+				await this.publish();
+				return { ...result, projectId: p.projectId };
 			}
 			case "submit":
 				return this.submit(p);
 			case "cancel":
 				return this.cancel();
-			case "approve":
-				if (!this.worker) throw Error("No active worker");
+			case "approve": {
+				if (!this.worker) throw new Error("No active worker");
 				this.worker.approve(p.id, p.approve);
+				const active = this.store.state.active;
+				if (active) {
+					const event = {
+						id: randomUUID(),
+						type: "approval-decision",
+						at: new Date().toISOString(),
+						data: { id: p.id, approve: p.approve },
+					};
+					this.store
+						.session(active.projectId, active.sessionId)
+						.events.push(event);
+					const execution = this.store.state.executions?.find(
+						(r) => r.sessionId === active.sessionId && !r.endedAt,
+					);
+					execution?.events.push(event);
+				}
+				await this.publish();
 				return;
+			}
 			case "artifacts": {
 				const entries = await fs.readdir(
-					this.store.workspace(this.store.project(p.projectId).id),
+					p.sessionId
+						? this.store.location(p.projectId, p.sessionId).workspace
+						: (this.store.project(p.projectId).directory ??
+								this.store.workspace(p.projectId)),
 					{ withFileTypes: true },
 				);
 				return entries.filter((e) => e.isFile()).map((e) => e.name);
@@ -302,7 +429,7 @@ export class Supervisor {
 					at <= Date.now() ||
 					![0, 3600000, 86400000].includes(interval)
 				)
-					throw Error("Invalid schedule");
+					throw new Error("Invalid schedule");
 				const s = {
 					id: randomUUID(),
 					projectId: p.projectId,
@@ -321,27 +448,57 @@ export class Supervisor {
 				const s = this.store.state.schedules.find(
 					(s) => s.id === identifier(p.id),
 				);
-				if (!s) throw Error("Schedule not found");
+				if (!s) throw new Error("Schedule not found");
 				s.enabled = false;
 				await this.publish();
 				return;
 			}
 			default:
-				throw Error("Unknown command");
+				throw new Error("Unknown command");
 		}
 	}
 	async tick(now = Date.now()) {
-		if (this.admitted) return;
+		if (
+			this.admitted ||
+			this.closed ||
+			this.recoveryBlocked ||
+			this.store.state.active
+		)
+			return;
 		const s = this.store.state.schedules.find(
 			(s) => s.enabled && s.nextAt <= now,
 		);
 		if (!s) return;
+		const execution = {
+			id: randomUUID(),
+			scheduleId: s.id,
+			projectId: s.projectId,
+			sessionId: s.sessionId,
+			projectName: this.store.project(s.projectId).name,
+			requestId: randomUUID(),
+			dueAt: s.nextAt,
+			startedAt: now,
+			prompt: s.prompt,
+			model: s.model,
+			status: "starting",
+			events: [] as any[],
+		};
+		this.store.state.executions ??= [];
+		this.store.state.executions.push(execution);
 		s.enabled = s.intervalMs > 0;
 		s.nextAt = now + s.intervalMs;
 		await this.publish();
 		try {
-			await this.submit({ ...s, requestId: randomUUID() });
+			await this.submit({ ...s, requestId: execution.requestId });
 		} catch (e) {
+			execution.status = "failed";
+			Object.assign(execution, { endedAt: Date.now() });
+			execution.events.push({
+				id: randomUUID(),
+				type: "error",
+				at: new Date().toISOString(),
+				data: String(e),
+			});
 			const session = this.store.session(s.projectId, s.sessionId);
 			session.events.push({
 				id: randomUUID(),

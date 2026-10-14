@@ -78,7 +78,7 @@ export async function modelRequest(
 	signal: AbortSignal,
 ) {
 	if (!["chat", "show", "ps"].includes(route))
-		throw Error("Model route denied");
+		throw new Error("Model route denied");
 	const payload =
 		route === "ps"
 			? undefined
@@ -98,7 +98,7 @@ export async function modelRequest(
 						},
 					};
 	if (JSON.stringify(payload ?? {}).length > 512000)
-		throw Error("Model request too large");
+		throw new Error("Model request too large");
 	const r = await fetch(`http://127.0.0.1:11434/api/${route}`, {
 		method: payload ? "POST" : "GET",
 		headers: { "Content-Type": "application/json" },
@@ -106,7 +106,7 @@ export async function modelRequest(
 		signal,
 	});
 	if (!r.ok)
-		throw Error(`Ollama ${r.status}: ${(await r.text()).slice(0, 1000)}`);
+		throw new Error(`Ollama ${r.status}: ${(await r.text()).slice(0, 1000)}`);
 	return r.json();
 }
 export class Worker {
@@ -203,7 +203,11 @@ export class Worker {
 		this.child?.stdin.write(`${JSON.stringify(data)}\n`);
 	}
 	async rpc(e: any) {
-		if (this.stopping || this.controller.signal.aborted) return;
+		if (this.stopping || this.controller.signal.aborted) {
+			if (typeof e.id === "string" && /^[a-f0-9-]{36}$/.test(e.id))
+				this.send({ type: "rpc-result", id: e.id, error: "Worker cancelled" });
+			return;
+		}
 		if (
 			typeof e.id !== "string" ||
 			!/^[a-f0-9-]{36}$/.test(e.id) ||
@@ -223,7 +227,7 @@ export class Worker {
 		this.rpcActive++;
 		try {
 			if (e.route === "chat" && ++this.modelCalls > 9)
-				throw Error("Model call budget exceeded");
+				throw new Error("Model call budget exceeded");
 			const data = await modelRequest(
 				e.route,
 				e.body,
@@ -246,7 +250,7 @@ export class Worker {
 			id !== this.approval.id ||
 			typeof approve !== "boolean"
 		)
-			throw Error("Approval is no longer pending");
+			throw new Error("Approval is no longer pending");
 		this.send({ type: "approval-reply", data: { ...this.approval, approve } });
 		this.approval = undefined;
 	}
@@ -260,7 +264,9 @@ export class Worker {
 			"--format",
 			"{{.Names}}",
 		]);
-		if (names.trim()) throw Error("Worker cleanup not confirmed");
+		if (names.trim()) throw new Error("Worker cleanup not confirmed");
+		if (this.config.sessionId)
+			await verifySessionWriterReleased(this.core, this.config.sessionId);
 	}
 	private started = false;
 	private stopPromise?: Promise<void>;
@@ -281,7 +287,24 @@ export class Worker {
 		this.send({ type: "stop" });
 		if (!this.started) return;
 		try {
-			await command(dockerPath, ["stop", "-t", "3", this.name]).catch(() => {});
+			const child = this.child;
+			const exited =
+				!child ||
+				(await new Promise<boolean>((resolve) => {
+					const timer = setTimeout(() => {
+						child.removeListener("close", closed);
+						resolve(false);
+					}, 5000);
+					function closed() {
+						clearTimeout(timer);
+						resolve(true);
+					}
+					child.once("close", closed);
+				}));
+			if (!exited)
+				await command(dockerPath, ["stop", "-t", "3", this.name]).catch(
+					() => {},
+				);
 			const names = await command(dockerPath, [
 				"ps",
 				"-a",
@@ -319,4 +342,33 @@ export async function projectBytes(roots: string[]): Promise<number> {
 		if (size > 268435456) break;
 	}
 	return size;
+}
+
+export async function verifySessionWriterReleased(
+	core: string,
+	sessionId: string,
+) {
+	if (!/^[a-f0-9-]{36}$/.test(sessionId))
+		throw new Error("Invalid session identity");
+	const retained = await Promise.all(
+		["owner", "guard"].map(async (suffix) => {
+			const file = path.join(
+				core,
+				"sessions",
+				".coordination",
+				`${sessionId}.${suffix}`,
+			);
+			try {
+				await fs.lstat(file);
+				return true;
+			} catch (error: any) {
+				if (error.code === "ENOENT") return false;
+				throw error;
+			}
+		}),
+	);
+	if (retained.some(Boolean))
+		throw new Error(
+			"Worker stopped but Orbit writer ownership remains; preserve history and inspect recovery before retry",
+		);
 }

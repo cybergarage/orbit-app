@@ -5,7 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Store, identifier } from "../src/store";
-import { dockerArgs, modelRequest, Worker } from "../src/worker";
+import {
+	dockerArgs,
+	modelRequest,
+	Worker,
+	verifySessionWriterReleased,
+} from "../src/worker";
 import { Supervisor } from "../src/supervisor";
 async function directory() {
 	return fs.mkdtemp(path.join(os.tmpdir(), "orbit-app-test-"));
@@ -126,6 +131,10 @@ test("single worker admission, cancellation and duplicate request rejection", as
 	await waitFor(() => !sup.worker);
 	await assert.rejects(sup.submit(input), /Duplicate/);
 	assert.equal(s.status, "cancelled");
+	await sup.submit({ ...input, requestId: randomUUID() });
+	assert.equal(count, 2);
+	await sup.cancel();
+	await waitFor(() => !sup.worker);
 });
 test("durable schedules coalesce missed runs, disable correctly and never require an always-on Mac", async () => {
 	const root = await directory();
@@ -263,4 +272,342 @@ test("new submissions stay blocked until prior container cleanup is confirmed", 
 	reclaim();
 	await waitFor(() => !sup.worker);
 	assert.equal(sup.store.state.active, undefined);
+});
+
+test("moving a session retains Orbit storage and cwd, schedules follow membership and edits affect only new chats", async () => {
+	const root = await directory(),
+		store = new Store(root);
+	await store.init();
+	const a = await store.createProject("A"),
+		b = await store.createProject("B");
+	const session = await store.createSession(a.id);
+	session.events.push({
+		type: "result",
+		at: new Date().toISOString(),
+		data: { answer: "preserved" },
+	});
+	await fs.writeFile(
+		path.join(store.core(a.id), "history-proof.json"),
+		"original Orbit journal",
+	);
+	store.state.schedules.push({
+		id: randomUUID(),
+		projectId: a.id,
+		sessionId: session.id,
+		prompt: "task",
+		model: "test",
+		enabled: true,
+		nextAt: Date.now() + 60000,
+		intervalMs: 0,
+	});
+	const before = store.location(a.id, session.id);
+	await store.moveSession({
+		projectId: a.id,
+		sessionId: session.id,
+		targetProjectId: b.id,
+	});
+	assert.deepEqual(store.location(b.id, session.id), before);
+	assert.equal(store.state.schedules[0].projectId, b.id);
+	const nextDirectory = await directory();
+	await store.editProject({
+		projectId: b.id,
+		name: "Edited B",
+		directory: nextDirectory,
+		instructions: "Use workspace guidance",
+	});
+	const newSession = await store.createSession(b.id);
+	assert.equal(newSession.workspace, await fs.realpath(nextDirectory));
+	assert.equal(session.workspace, before.workspace);
+	await store.renameSession({
+		projectId: b.id,
+		sessionId: session.id,
+		name: "Renamed",
+	});
+	const restored = new Store(root);
+	await restored.init();
+	assert.equal(restored.session(b.id, session.id).name, "Renamed");
+	assert.equal(
+		restored.session(b.id, session.id).events[0].data.answer,
+		"preserved",
+	);
+	assert.equal(
+		await fs.readFile(
+			path.join(restored.location(b.id, session.id).core, "history-proof.json"),
+			"utf8",
+		),
+		"original Orbit journal",
+	);
+});
+
+test("active and recovery-pending sessions cannot move and legacy migration keeps a backup", async () => {
+	const root = await directory(),
+		p = randomUUID(),
+		s = randomUUID(),
+		target = randomUUID();
+	const legacy = {
+		projects: [
+			{
+				id: p,
+				name: "Legacy",
+				sessions: [{ id: s, name: "Old", status: "idle", events: [] }],
+			},
+			{ id: target, name: "Target", sessions: [] },
+		],
+		schedules: [],
+	};
+	await fs.writeFile(path.join(root, "state.json"), JSON.stringify(legacy));
+	const store = new Store(root);
+	await store.init();
+	assert.deepEqual(
+		JSON.parse(
+			await fs.readFile(path.join(root, "state.pre-approved-ui.json"), "utf8"),
+		),
+		legacy,
+	);
+	const session = store.session(p, s);
+	assert.equal(session.storageProjectId, p);
+	assert.equal(session.workspace, store.workspace(p));
+	session.status = "recovery-blocked";
+	await assert.rejects(
+		store.moveSession({ projectId: p, sessionId: s, targetProjectId: target }),
+		/cannot be moved/,
+	);
+	session.status = "idle";
+	store.state.active = { projectId: p, sessionId: s };
+	await assert.rejects(
+		store.moveSession({ projectId: p, sessionId: s, targetProjectId: target }),
+		/cannot be moved/,
+	);
+	assert.equal(store.project(p).sessions.length, 1);
+	assert.equal(store.project(target).sessions.length, 0);
+	await assert.rejects(store.directory(os.homedir()), /cannot be worker/);
+	await assert.rejects(store.directory("/etc"), /cannot be worker/);
+});
+
+test("schedule occurrence captures admission failures without fabricated answers and restart interrupts unfinished executions", async () => {
+	const root = await directory(),
+		sup = new Supervisor(root, () => {});
+	await sup.init();
+	const p = await sup.store.createProject("P"),
+		s = await sup.store.createSession(p.id);
+	const definition: any = await sup.dispatch("schedule", {
+		projectId: p.id,
+		sessionId: s.id,
+		prompt: "Real task",
+		model: "missing",
+		nextAt: Date.now() + 60000,
+		intervalMs: 0,
+	});
+	sup.health = async () => ({
+		docker: false,
+		ollama: false,
+		image: false,
+		models: [],
+		detail: [],
+	});
+	await sup.tick(definition.nextAt);
+	const run = sup.store.state.executions?.[0];
+	assert.ok(run);
+	assert.equal(run.status, "failed");
+	assert.equal(run.prompt, "Real task");
+	assert.equal(run.answer, undefined);
+	assert.equal(run.scheduleId, definition.id);
+	assert.ok(run.events.some((e) => e.type === "error"));
+	await sup.tick(definition.nextAt + 60000);
+	assert.equal(sup.store.state.executions?.length, 1);
+	delete run.endedAt;
+	run.status = "running";
+	await sup.store.save();
+	const restored = new Store(root);
+	await restored.init();
+	assert.equal(restored.state.executions?.[0].status, "interrupted");
+	assert.ok(restored.state.executions?.[0].endedAt);
+});
+
+test("scheduled worker events, approval decisions, result and duration are independently retained", async () => {
+	let finish: () => void = () => {},
+		emit: (e: any) => void = () => {};
+	const sup = new Supervisor(
+		await directory(),
+		() => {},
+		(_workspace, _core, _config, event) => {
+			emit = event;
+			return {
+				name: `orbit-app-${randomUUID()}`,
+				start: () =>
+					new Promise<void>((r) => {
+						finish = r;
+					}),
+				stop: async () => finish(),
+				approve: () => {},
+				confirmGone: async () => {},
+			} as unknown as Worker;
+		},
+	);
+	await sup.init();
+	sup.health = async () => ({
+		docker: true,
+		ollama: true,
+		image: true,
+		models: ["fixture"],
+		detail: [],
+	});
+	const p = await sup.store.createProject("P"),
+		s = await sup.store.createSession(p.id);
+	const definition: any = await sup.dispatch("schedule", {
+		projectId: p.id,
+		sessionId: s.id,
+		prompt: "Input",
+		model: "fixture",
+		nextAt: Date.now() + 60000,
+		intervalMs: 0,
+	});
+	await sup.tick(definition.nextAt);
+	emit({
+		type: "approval",
+		data: { id: "approval", preview: { command: "write" } },
+	});
+	await sup.dispatch("approve", { id: "approval", approve: false });
+	emit({ type: "agent-event", data: { toolCall: { name: "write" } } });
+	emit({
+		type: "result",
+		data: {
+			answer: "Answer",
+			runtime: { outcome: "completed", runId: "fixture-orbit-run" },
+		},
+	});
+	finish();
+	await waitFor(() => !sup.worker);
+	const run = sup.store.state.executions?.[0];
+	assert.ok(run);
+	assert.equal(run.orbitRunId, "fixture-orbit-run");
+	assert.equal(run.answer, "Answer");
+	assert.equal(run.status, "completed");
+	assert.ok(run.endedAt);
+	assert.deepEqual(
+		run.events.map((e) => e.type),
+		["approval", "approval-decision", "agent-event", "result"],
+	);
+});
+
+test("leftover Orbit writer evidence blocks recovery and is never deleted", async () => {
+	const core = await directory(),
+		id = randomUUID();
+	await verifySessionWriterReleased(core, id);
+	const dir = path.join(core, "sessions", ".coordination");
+	await fs.mkdir(dir, { recursive: true });
+	const file = path.join(dir, `${id}.owner`),
+		bytes = JSON.stringify({ pid: 1, token: randomUUID(), version: 1 });
+	await fs.writeFile(file, bytes);
+	await assert.rejects(
+		verifySessionWriterReleased(core, id),
+		/writer ownership remains/,
+	);
+	assert.equal(await fs.readFile(file, "utf8"), bytes);
+});
+
+test("late model RPC after stop receives cancellation rather than hanging the worker", async () => {
+	const worker = new Worker("/tmp/a", "/tmp/b", { model: "fixture" }, () => {});
+	const messages: any[] = [];
+	worker.send = (message) => {
+		messages.push(message);
+	};
+	worker.controller.abort();
+	const id = randomUUID();
+	await worker.rpc({ id, route: "chat", body: {} });
+	assert.deepEqual(messages, [
+		{ type: "rpc-result", id, error: "Worker cancelled" },
+	]);
+});
+
+test("external workspaces require private user-owned paths and are revalidated before execution", async () => {
+	const root = await directory(),
+		store = new Store(root);
+	await store.init();
+	const external = await directory();
+	assert.equal(await store.directory(external), await fs.realpath(external));
+	const project = await store.createProject("Private", external),
+		session = await store.createSession(project.id);
+	assert.equal(
+		await store.executionWorkspace(project.id, session.id),
+		await fs.realpath(external),
+	);
+	await fs.chmod(external, 0o777);
+	await assert.rejects(store.directory(external), /not group\/world writable/);
+	await assert.rejects(
+		store.executionWorkspace(project.id, session.id),
+		/not group\/world writable/,
+	);
+	await fs.chmod(external, 0o700);
+	const child = path.join(external, "child");
+	await fs.mkdir(child, { mode: 0o700 });
+	await fs.chmod(external, 0o770);
+	await assert.rejects(store.directory(child), /not group\/world writable/);
+	await fs.chmod(external, 0o700);
+	const alias = path.join(root, "alias");
+	await fs.symlink(external, alias);
+	assert.equal(await store.directory(alias), await fs.realpath(external));
+	const commaDirectory = path.join(root, "comma,directory");
+	await fs.mkdir(commaDirectory, { mode: 0o700 });
+	const commaAlias = path.join(root, "comma-alias");
+	await fs.symlink(commaDirectory, commaAlias);
+	await assert.rejects(
+		store.directory(commaAlias),
+		/Canonical working directory/,
+	);
+	const moved = `${external}-moved`;
+	await fs.rename(external, moved);
+	await fs.symlink(moved, external);
+	await assert.rejects(
+		store.executionWorkspace(project.id, session.id),
+		/identity changed/,
+	);
+	const defaultProject = await store.createProject("Managed"),
+		defaultSession = await store.createSession(defaultProject.id);
+	assert.equal(
+		await store.executionWorkspace(defaultProject.id, defaultSession.id),
+		store.workspace(defaultProject.id),
+	);
+	await fs.chmod(store.workspace(defaultProject.id), 0o777);
+	await assert.rejects(
+		store.executionWorkspace(defaultProject.id, defaultSession.id),
+		/not group\/world writable/,
+	);
+});
+
+test("submission never reaches Docker admission after an external workspace becomes shared writable", async () => {
+	let admitted = 0;
+	const supervisor = new Supervisor(
+		await directory(),
+		() => {},
+		() => {
+			admitted++;
+			throw new Error("Unexpected worker admission");
+		},
+	);
+	await supervisor.init();
+	supervisor.health = async () => ({
+		docker: true,
+		ollama: true,
+		image: true,
+		models: ["fixture"],
+		detail: [],
+	});
+	const external = await directory(),
+		project = await supervisor.store.createProject("External", external),
+		session = await supervisor.store.createSession(project.id);
+	await fs.chmod(external, 0o777);
+	await assert.rejects(
+		supervisor.submit({
+			projectId: project.id,
+			sessionId: session.id,
+			prompt: "Task",
+			model: "fixture",
+			requestId: randomUUID(),
+		}),
+		/not group\/world writable/,
+	);
+	assert.equal(admitted, 0);
+	assert.equal(supervisor.store.state.active, undefined);
+	assert.equal(session.status, "idle");
 });

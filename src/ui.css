@@ -254,7 +254,7 @@ main {
 .timeline {
 	overflow: auto;
 	flex: 1;
-	padding: 24px 0;
+	padding: 36px 18px 18px;
 }
 .empty {
 	justify-content: center;
@@ -275,12 +275,13 @@ main {
 	background: white;
 	border: 1px solid #e0dfd8;
 	border-radius: 12px;
-	padding: 16px;
+	padding: 18px;
 	text-align: left;
 }
 .composer textarea {
 	width: 100%;
-	height: 72px;
+	padding: 0;
+	height: 64px;
 	border: 0;
 	resize: vertical;
 }
@@ -301,7 +302,10 @@ main {
 	max-width: 220px;
 }
 .composer button {
-	min-width: 120px;
+	font-size: 12px;
+	min-width: 108px;
+	min-height: 34px;
+	padding: 7px 12px;
 }
 article {
 	border: 1px solid #e0dfd8;
@@ -474,9 +478,6 @@ output.error {
 .chat-status small {
 	color: var(--accent);
 }
-.timeline {
-	padding: 36px 18px 18px;
-}
 .timeline article {
 	width: min(100%, 760px);
 	padding: 18px;
@@ -604,17 +605,4 @@ output.error {
 .debug-pane details {
 	font-size: 12px;
 	overflow-wrap: anywhere;
-}
-.composer {
-	padding: 18px;
-}
-.composer textarea {
-	padding: 0;
-	height: 64px;
-}
-.composer button {
-	font-size: 12px;
-	min-width: 108px;
-	min-height: 34px;
-	padding: 7px 12px;
 }

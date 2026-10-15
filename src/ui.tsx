@@ -41,6 +41,18 @@ function eventContent(event: EventRecord) {
 	if (typeof event.data === "string") return event.data;
 	return JSON.stringify(event.data, null, 2);
 }
+function eventLabel(event: EventRecord, raw: boolean) {
+	if (raw) return event.type;
+	return event.type === "submission" ? "YOU" : "ORBIT";
+}
+function eventDisplayContent(event: EventRecord, raw: boolean) {
+	if (raw) return JSON.stringify(event, null, 2);
+	if (event.type === "error")
+		return "The task could not finish. Your conversation is saved. Check the runtime connection and retry when it is ready. Open Debug for details.";
+	if (event.type === "cancel-requested")
+		return "Stop requested. Wait for the worker to finish before submitting again.";
+	return eventContent(event);
+}
 function Events({
 	events,
 	raw = false,
@@ -68,18 +80,8 @@ function Events({
 						key={e.id ?? i}
 						className={e.type === "submission" ? "user" : "agent"}
 					>
-						<small>
-							{raw ? e.type : e.type === "submission" ? "YOU" : "ORBIT"}
-						</small>
-						<pre>
-							{raw
-								? JSON.stringify(e, null, 2)
-								: e.type === "error"
-									? "The task could not finish. Your conversation is saved. Check the runtime connection and retry when it is ready. Open Debug for details."
-									: e.type === "cancel-requested"
-										? "Stop requested. Wait for the worker to finish before submitting again."
-										: eventContent(e)}
-						</pre>
+						<small>{eventLabel(e, raw)}</small>
+						<pre>{eventDisplayContent(e, raw)}</pre>
 					</article>
 				))}
 		</>

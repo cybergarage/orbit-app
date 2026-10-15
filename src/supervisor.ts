@@ -429,6 +429,11 @@ export class Supervisor {
 				await this.publish();
 				return session;
 			}
+			case "rename-project": {
+				const result = await this.store.renameProject(p);
+				await this.publish();
+				return result;
+			}
 			case "rename-session": {
 				const result = await this.store.renameSession(p);
 				await this.publish();

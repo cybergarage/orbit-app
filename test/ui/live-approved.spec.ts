@@ -50,12 +50,12 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 			.fill(
 				`Remember the exact marker ${marker} for this conversation. Reply with only the marker. Do not use tools, commands, files, network or any external service.`,
 			);
-		await page.getByRole("button", { name: "Run task", exact: false }).click();
+		await page.getByRole("button", { name: /(?:Run|Retry) task/ }).click();
 		await expect(
 			page.getByRole("button", { name: "Stop worker", exact: true }),
 		).toBeVisible({ timeout: 15000 });
 		await expect(
-			page.getByRole("button", { name: "Run task", exact: false }),
+			page.getByRole("button", { name: /(?:Run|Retry) task/ }),
 		).toBeVisible({ timeout: 90000 });
 		let state = await page.evaluate(() => window.orbit.call("snapshot"));
 		const source = state.projects.find((p: any) => p.name === "Live source");
@@ -71,7 +71,7 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 			.fill(
 				"Do not use tools, commands, files, network or external services. Write a long numbered list of 1000 distinct plain words, one per line.",
 			);
-		await page.getByRole("button", { name: "Run task", exact: false }).click();
+		await page.getByRole("button", { name: /(?:Run|Retry) task/ }).click();
 		let name = "";
 		await expect
 			.poll(
@@ -99,7 +99,7 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 			.getByRole("button", { name: "Stop worker", exact: true })
 			.click();
 		await expect(
-			page.getByRole("button", { name: "Run task", exact: false }),
+			page.getByRole("button", { name: /(?:Run|Retry) task/ }),
 		).toBeVisible({ timeout: 15000 });
 		state = await page.evaluate(() => window.orbit.call("snapshot"));
 		expect(state.active).toBeUndefined();
@@ -122,9 +122,7 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 			(event: any) =>
 				event.type === "result" && event.requestId === cancelledRequest,
 		)?.data.runtime.outcome;
-		await expect(
-			page.getByText(/cancelled · Working directory:/),
-		).toBeVisible();
+		await expect(page.getByText("cancelled", { exact: true })).toBeVisible();
 		expect(
 			(
 				await command(dockerPath, [
@@ -142,12 +140,12 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 			.fill(
 				"Without using tools, commands, files, network or external services, reply with only READY.",
 			);
-		await page.getByRole("button", { name: "Run task", exact: false }).click();
+		await page.getByRole("button", { name: /(?:Run|Retry) task/ }).click();
 		await expect(
 			page.getByRole("button", { name: "Stop worker", exact: true }),
 		).toBeVisible({ timeout: 15000 });
 		await expect(
-			page.getByRole("button", { name: "Run task", exact: false }),
+			page.getByRole("button", { name: /(?:Run|Retry) task/ }),
 		).toBeVisible({ timeout: 90000 });
 		state = await page.evaluate(() => window.orbit.call("snapshot"));
 		const retrySession = state.projects.find((p: any) => p.id === source.id)
@@ -173,7 +171,7 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 			{ recursive: true },
 		);
 		await page
-			.getByRole("button", { name: "Session menu Session 1", exact: true })
+			.getByRole("button", { name: "Chat menu Chat 1", exact: true })
 			.click();
 		await page
 			.getByRole("menuitem", { name: "Move to project", exact: true })
@@ -181,9 +179,7 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 		await page
 			.getByLabel("Destination project")
 			.selectOption({ label: "Live destination" });
-		await page
-			.getByRole("button", { name: "Move session", exact: true })
-			.click();
+		await page.getByRole("button", { name: "Move chat", exact: true }).click();
 		state = await page.evaluate(() => window.orbit.call("snapshot"));
 		const destination = state.projects.find(
 			(p: any) => p.name === "Live destination",
@@ -199,18 +195,18 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 		await app.close();
 		app = await launch();
 		page = await app.firstWindow();
-		await page.getByRole("button", { name: "Session 1", exact: true }).click();
+		await page.getByRole("button", { name: "Chat 1", exact: true }).click();
 		await page
 			.getByLabel("Task", { exact: true })
 			.fill(
 				"From the first turn of this conversation, recall the exact marker I asked you to remember. Reply with only that marker. Do not use tools, commands, files, network or any external service.",
 			);
-		await page.getByRole("button", { name: "Run task", exact: false }).click();
+		await page.getByRole("button", { name: /(?:Run|Retry) task/ }).click();
 		await expect(
 			page.getByRole("button", { name: "Stop worker", exact: true }),
 		).toBeVisible({ timeout: 15000 });
 		await expect(
-			page.getByRole("button", { name: "Run task", exact: false }),
+			page.getByRole("button", { name: /(?:Run|Retry) task/ }),
 		).toBeVisible({ timeout: 90000 });
 		state = await page.evaluate(() => window.orbit.call("snapshot"));
 		const resumed = state.projects.find((p: any) => p.id === destination.id)

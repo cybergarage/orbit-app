@@ -1,3 +1,25 @@
+# Approved Figma implementation update — 2026-10-15
+
+Branch: `codex/approved-figma-ui`, based on fetched `origin/main` at `6c0172b` (PR #5). The original checkout was clean and remains on its original main; no stash, backup, or history copy was created. This worktree reuses the existing dependencies through an ignored symlink.
+
+Implemented from Figma file `fdA4ptdJQKfwkB7UGWT943`: normal `4:7`, Debug `64:2301`, narrow `65:2465` / `66:2709`, Project rename `42:809` / `65:2627`, Chat rename `43:802` / `65:2789`, failure `65:2951` / `67:2768`. Design context and screenshots were read before editing. Prototype review controls, sample branding, sample messages and sample names are not production content.
+
+The conversation places user messages right and answers left. Raw events and runtime reasons appear only in the optional right Debug pane. At widths up to 1200px Debug overlays the conversation. Approval controls, failures, interruption/cancellation history and Stop remain accessible without Debug. Debug retains events when closed, offers real workspace-file refresh and the existing schedule editor. Project rows provide new Chat and menu icons; Chat rows provide menus. Outside click and Escape close menus without navigation. Rename uses editable pages, actual persisted names, validation, Cancel and Save name. Project rename changes only the name; directory, guidance and session storage remain intact. Failed/cancelled/interrupted conversations restore their last real input for editing and Retry with a new request ID.
+
+The host Store remains authoritative for App project/chat labels (`state.json`); the container receives session IDs, prompt, model and original workspace/core paths. Worker dependency remains pinned to `@cybergarage/orbit` 0.8.1. No new core release or data migration is needed for this UI. Adopting the new core rename APIs separately would require adding a host/core integration and explicitly reconciling App metadata versus core identity/storage contracts; do not change the Worker pin or migrate existing histories as part of this UI.
+
+All verification uses fresh synthetic temporary roots through `ORBIT_APP_TEST=1` / `ORBIT_APP_DATA`. The legacy first-run backup creation was removed to honor the explicit no-backups requirement. No real user history was opened or modified, and no Docker image/model was built, pulled or removed.
+
+Validation: lint, typecheck, build, 26 unit/policy tests, and five Electron UI tests pass. Screenshots in ignored `test-results/approved-*.png` cover normal, Debug, narrow closed/open, failure and Project rename; existing tests also cover Chat rename/restart, move, schedule history, outside/Escape and local icon geometry. Unit lifecycle tests use fake workers; UI tests use actual host IPC, Store and scheduler with synthetic data. Failure Retry exercises real host admission rejection and input retention. Live verification now passes using the existing fully qualified image `docker.io/library/orbit-app-worker:0.1.0`. Docker Desktop's `desktop-linux` context points to `/Users/skonno/.docker/run/docker.sock`; default `/var/run/docker.sock` is a symlink to the same socket. Short-tag `image inspect orbit-app-worker:0.1.0` fails, while the full `docker.io/library/` name, image ID and digest resolve to `sha256:964578b3d404cffc335ef62d886bee2b8c2675361ade25c9b8cdf1d8adc6699f` (linux/arm64, created 2026-10-03). The runtime now uses that fully qualified tag. No daemon/context change, image download, rebuild, deletion or retagging was needed.
+
+The opt-in Electron live test passed in 19.2 seconds with existing `gemma4:12b`: actual inference returned `MAPLE-6382`; the running worker was cancelled and its container confirmed gone; resend returned `READY`; moving the Chat, restarting the app and resuming the original Orbit history recovered `MAPLE-6382`. All four submissions used synthetic data and no tools/approvals. The isolated fixture was removed. Evidence is retained in ignored `test-results/live-approved.json`. Real pending-approval rendering remains unverified; approval boundary/lifecycle unit tests pass.
+
+This implementation is prepared for a Draft PR. Merge, release and deployment remain outside the authorized scope.
+
+---
+
+## Historical implementation notes (preceding this update)
+
 # Approved desktop UI and persistence contracts
 
 This implementation builds on `e87330e094f2a55bda172b78c808ce05b0da5658` and keeps the worker pinned to Orbit 0.8.1. It changes the Electron/React app; Orbit upstream and Nest are unchanged.
@@ -10,7 +32,7 @@ Session menus open through right-click or the ellipsis button. Outside pointer i
 
 ## History and directory preservation
 
-The additive metadata migration retains existing project/session/event/schedule collections and core files. An existing state file is copied exclusively to `state.pre-approved-ui.json` before its first upgrade; this file is never overwritten. Core journals and transcripts are not physically moved or copied.
+The additive metadata migration retains existing project/session/event/schedule collections and core files. Initialization no longer creates `state.pre-approved-ui.json` or any other backup. Existing metadata is normalized in place using the established atomic save path. Core journals and transcripts are not physically moved or copied.
 
 Each session records its original `storageProjectId` and host `workspace`. Membership moves retain both values, so future workers reopen the original Orbit core and the original directory mounted at `/workspace`. Linked future schedules follow membership, while past execution records retain historical project identity. Directory changes affect new conversations only. Future tasks receive current project guidance alongside an explicit instruction to follow workspace ORBIT.md / AGENTS.md guidance; this does not replace Orbit policy or instruction discovery.
 

@@ -33,26 +33,55 @@ function NativeDialog({
 function eventContent(event: EventRecord) {
 	if (event.type === "submission") return event.data.prompt;
 	if (event.type === "result") {
-		const runtime = event.data.runtime;
-		return `${event.data.answer ?? ""}\nRuntime: ${runtime?.outcome ?? "unknown"} (${runtime?.reason ?? ""})`;
+		return (
+			event.data.answer ||
+			"No answer was returned. Check the task status and open Debug for details."
+		);
 	}
 	if (typeof event.data === "string") return event.data;
 	return JSON.stringify(event.data, null, 2);
 }
-function Events({ events }: { readonly events: readonly EventRecord[] }) {
+function Events({
+	events,
+	raw = false,
+}: {
+	readonly events: readonly EventRecord[];
+	readonly raw?: boolean;
+}) {
 	return (
 		<>
-			{events.map((e, i) => (
-				<article
-					key={e.id ?? i}
-					className={e.type === "submission" ? "user" : "agent"}
-				>
-					<small>
-						{e.type} · {new Date(e.at).toLocaleString()}
-					</small>
-					<pre>{eventContent(e)}</pre>
-				</article>
-			))}
+			{events
+				.filter(
+					(e) =>
+						raw ||
+						[
+							"submission",
+							"result",
+							"error",
+							"interrupted",
+							"cancel-requested",
+							"approval-decision",
+						].includes(e.type),
+				)
+				.map((e, i) => (
+					<article
+						key={e.id ?? i}
+						className={e.type === "submission" ? "user" : "agent"}
+					>
+						<small>
+							{raw ? e.type : e.type === "submission" ? "YOU" : "ORBIT"}
+						</small>
+						<pre>
+							{raw
+								? JSON.stringify(e, null, 2)
+								: e.type === "error"
+									? "The task could not finish. Your conversation is saved. Check the runtime connection and retry when it is ready. Open Debug for details."
+									: e.type === "cancel-requested"
+										? "Stop requested. Wait for the worker to finish before submitting again."
+										: eventContent(e)}
+						</pre>
+					</article>
+				))}
 		</>
 	);
 }
@@ -85,7 +114,7 @@ function App() {
 							<strong>Answer</strong>
 							<pre>{execution.answer ?? "No answer yet"}</pre>
 						</div>
-						<Events events={execution.events} />
+						<Events events={execution.events} raw />
 					</>
 				);
 			}
@@ -187,6 +216,8 @@ function App() {
 
 	const [state, setState] = useState<Snapshot>({ projects: [], schedules: [] });
 	const [view, setView] = useState("home");
+	const [debug, setDebug] = useState(false);
+	const [savingName, setSavingName] = useState(false);
 	const [projectId, setProject] = useState("");
 	const [sessionId, setSession] = useState("");
 	const [prompt, setPrompt] = useState("");
@@ -205,7 +236,7 @@ function App() {
 		x: number;
 		y: number;
 	}>();
-	const [dialog, setDialog] = useState<"rename" | "move">();
+	const [dialog, setDialog] = useState<"rename" | "move" | "rename-project">();
 	const [rename, setRename] = useState("");
 	const [target, setTarget] = useState("");
 	const [subject, setSubject] = useState<{
@@ -255,7 +286,15 @@ function App() {
 		setSession(s);
 		setView("home");
 		setArtifacts([]);
-		setPrompt("");
+		const opened = state.projects
+			.find((item) => item.id === p)
+			?.sessions.find((item) => item.id === s);
+		setPrompt(
+			opened && ["failed", "cancelled", "interrupted"].includes(opened.status)
+				? (opened.events.findLast((event) => event.type === "submission")?.data
+						.prompt ?? "")
+				: "",
+		);
 		setModel("");
 	}
 	function newProject() {
@@ -263,16 +302,26 @@ function App() {
 		setForm({ name: "", directory: "", instructions: "" });
 		setView("project");
 	}
-	async function newChat() {
+	async function newChat(id = project?.unassigned ? "" : project?.id) {
 		await action(async () => {
 			const s = await window.orbit.call("create-session", {
-				projectId: project?.unassigned ? "" : project?.id,
+				projectId: id,
 			});
 			openSession(s.projectId, s.id);
 		});
 	}
+	const lastSubmission = session?.events.findLast(
+		(e) => e.type === "submission",
+	);
+	const retryable =
+		!!session &&
+		["failed", "cancelled", "interrupted"].includes(session.status);
+	const taskInput = prompt;
+	useEffect(() => {
+		if (retryable) setPrompt(lastSubmission?.data.prompt ?? "");
+	}, [retryable, lastSubmission?.data.prompt]);
 	async function submit() {
-		if (busy || active || !prompt.trim() || !selectedModel) return;
+		if (busy || active || !taskInput.trim() || !selectedModel) return;
 		setBusy(true);
 		await action(async () => {
 			let p = projectId,
@@ -289,7 +338,7 @@ function App() {
 			await window.orbit.call("submit", {
 				projectId: p,
 				sessionId: s,
-				prompt,
+				prompt: taskInput,
 				model: selectedModel,
 				requestId: crypto.randomUUID(),
 			});
@@ -329,7 +378,7 @@ function App() {
 		<div className="composer">
 			<textarea
 				aria-label="Task"
-				value={prompt}
+				value={taskInput}
 				onChange={(e) => setPrompt(e.target.value)}
 				placeholder="Ask anything…"
 				maxLength={12000}
@@ -376,10 +425,10 @@ function App() {
 					<button
 						type="button"
 						className="primary"
-						disabled={!prompt.trim() || !selectedModel}
+						disabled={!taskInput.trim() || !selectedModel}
 						onClick={() => void submit()}
 					>
-						Run task ↗
+						{retryable ? "Retry task ↗" : "Run task ↗"}
 					</button>
 				)}
 			</div>
@@ -391,8 +440,7 @@ function App() {
 				<section className="page project-form">
 					<h1>{editing ? "Edit project" : "New project"}</h1>
 					<p>
-						Create a space for related sessions. Only the project name is
-						required.
+						Create a space for related chats. Only the project name is required.
 					</p>
 					<form
 						onSubmit={(e) => {
@@ -540,75 +588,129 @@ function App() {
 	function renderConversation() {
 		return (
 			view === "home" && (
-				<section className={`conversation ${!session ? "empty" : ""}`}>
+				<section
+					className={`conversation ${!session ? "empty" : ""} ${debug ? "debug-open" : ""}`}
+				>
 					{session ? (
 						<>
 							<header>
 								<div>
-									<small>{project?.unassigned ? "Chat" : project?.name}</small>
 									<h1>{session.name}</h1>
 									<small>
-										{session.status} · Working directory: {session.workspace}
+										{project?.unassigned ? "Chats" : project?.name} /{" "}
+										{session.name}
 									</small>
 								</div>
-								<button type="button" onClick={() => void newChat()}>
-									+ Session
-								</button>
-							</header>
-							<div className="timeline">
-								<Events events={session.events} />
-								{!session.events.length && (
-									<p>No messages yet. Describe a task below.</p>
-								)}
-							</div>
-							{pending && (
-								<div className="approval">
-									<strong>Review operation</strong>
-									<pre>{JSON.stringify(pending.preview, null, 2)}</pre>
-									<div className="actions">
-										{[true, false].map((approve) => (
-											<button
-												type="button"
-												key={String(approve)}
-												onClick={() =>
-													void action(() =>
-														window.orbit.call("approve", {
-															id: pending.id,
-															approve,
-														}),
-													)
-												}
-											>
-												{approve ? "Approve" : "Deny"}
-											</button>
-										))}
-									</div>
-								</div>
-							)}
-							{composer}
-							<div className="actions">
-								<button type="button" onClick={() => setView("schedule")}>
-									Schedule current task
-								</button>
 								<button
 									type="button"
-									onClick={() =>
-										void action(async () =>
-											setArtifacts(
-												await window.orbit.call("artifacts", {
-													projectId,
-													sessionId,
-												}),
-											),
-										)
-									}
+									className={`icon-button ${debug ? "selected" : ""}`}
+									aria-label="Debug"
+									aria-expanded={debug}
+									aria-controls="debug-pane"
+									onClick={() => setDebug(!debug)}
 								>
-									Refresh files
+									<img src="assets/debug.svg" alt="" />
 								</button>
-								{artifacts.map((f) => (
-									<small key={f}>{f}</small>
-								))}
+							</header>
+							<div className="conversation-body">
+								<div className="chat-content">
+									<div className="chat-status">
+										<strong>{session.name}</strong>
+										<small>{session.status}</small>
+									</div>
+									<div className="timeline">
+										<Events events={session.events} />
+										{!session.events.length && (
+											<p>No messages yet. Describe a task below.</p>
+										)}
+									</div>
+									{pending && (
+										<div className="approval">
+											<strong>Review operation</strong>
+											<pre>{JSON.stringify(pending.preview, null, 2)}</pre>
+											<div className="actions">
+												{[true, false].map((approve) => (
+													<button
+														type="button"
+														key={String(approve)}
+														onClick={() =>
+															void action(() =>
+																window.orbit.call("approve", {
+																	id: pending.id,
+																	approve,
+																}),
+															)
+														}
+													>
+														{approve ? "Approve" : "Deny"}
+													</button>
+												))}
+											</div>
+										</div>
+									)}
+									{composer}
+								</div>
+								{debug && (
+									<section
+										id="debug-pane"
+										className="debug-pane"
+										aria-label="Debug details"
+									>
+										<div className="debug-heading">
+											<span>Debug</span>
+											<button
+												type="button"
+												className="icon-button"
+												aria-label="Close Debug"
+												onClick={() => setDebug(false)}
+											>
+												<img src="assets/close.svg" alt="" />
+											</button>
+										</div>
+										<p>Current chat · {session.name}</p>
+										<small>EVENT LOG</small>
+										<div className="debug-events">
+											<Events events={session.events} raw />
+										</div>
+										<small>Logs are retained when Debug is turned off.</small>
+										<details>
+											<summary>Working directory</summary>
+											<small>{session.workspace}</small>
+										</details>
+										<p>Workspace files</p>
+										{artifacts.length ? (
+											artifacts.map((f) => <small key={f}>{f}</small>)
+										) : (
+											<small>No files listed</small>
+										)}
+										<button
+											type="button"
+											onClick={() =>
+												void action(async () =>
+													setArtifacts(
+														await window.orbit.call("artifacts", {
+															projectId,
+															sessionId,
+														}),
+													),
+												)
+											}
+										>
+											Refresh files
+										</button>
+										<button type="button" onClick={() => setView("schedule")}>
+											Schedule this task
+										</button>
+										<small>
+											Approvals and important failures remain visible in the
+											conversation.
+										</small>
+									</section>
+								)}
 							</div>
+							<small className="conversation-footer">
+								Workspaces persist; active tasks stop when the app exits.
+							</small>
 						</>
 					) : (
 						<div className="welcome">
@@ -816,7 +918,7 @@ function App() {
 									>
 										{(() => {
 											if (command === "rename") {
-												return "Rename session…";
+												return "Rename chat…";
 											}
 											if (locked) {
 												return "Move unavailable";
@@ -830,25 +932,45 @@ function App() {
 								)}
 							</>
 						) : (
-							<button
-								type="button"
-								role="menuitem"
-								onClick={() => {
-									const p = state.projects.find((p) => p.id === menu.projectId);
-									if (p) {
-										setEditing(p.id);
-										setForm({
-											name: p.name,
-											directory: p.directory ?? "",
-											instructions: p.instructions ?? "",
-										});
-										setView("project");
-									}
-									setMenu(undefined);
-								}}
-							>
-								Edit project
-							</button>
+							<>
+								<button
+									type="button"
+									role="menuitem"
+									aria-label="Rename"
+									onClick={() => {
+										setSubject({ projectId: menu.projectId, sessionId: "" });
+										setRename(
+											state.projects.find((p) => p.id === menu.projectId)
+												?.name ?? "",
+										);
+										setDialog("rename-project");
+										setMenu(undefined);
+									}}
+								>
+									Rename project…
+								</button>
+								<button
+									type="button"
+									role="menuitem"
+									onClick={() => {
+										const p = state.projects.find(
+											(p) => p.id === menu.projectId,
+										);
+										if (p) {
+											setEditing(p.id);
+											setForm({
+												name: p.name,
+												directory: p.directory ?? "",
+												instructions: p.instructions ?? "",
+											});
+											setView("project");
+										}
+										setMenu(undefined);
+									}}
+								>
+									Edit project
+								</button>
+							</>
 						)}
 					</div>
 				</>
@@ -856,71 +978,113 @@ function App() {
 		);
 	}
 	function renderSessionDialog() {
+		if (dialog && dialog !== "move" && subject) {
+			const isProject = dialog === "rename-project";
+			return (
+				<section className="page project-form rename-page">
+					<h1>{isProject ? "Rename project" : "Rename chat"}</h1>
+					<p>
+						{isProject
+							? "Change the project label in the sidebar."
+							: "Change the conversation title."}
+					</p>
+					<form
+						onSubmit={(e) => {
+							e.preventDefault();
+							if (savingName) return;
+							setSavingName(true);
+							void action(async () => {
+								if (isProject)
+									await window.orbit.call("rename-project", {
+										projectId: subject.projectId,
+										name: rename,
+									});
+								else
+									await window.orbit.call("rename-session", {
+										...subject,
+										name: rename,
+									});
+								setDialog(undefined);
+							}).finally(() => setSavingName(false));
+						}}
+					>
+						<label htmlFor="rename-name">
+							{isProject ? "Project name *" : "Chat name *"}
+						</label>
+						<input
+							id="rename-name"
+							value={rename}
+							required
+							maxLength={80}
+							onChange={(e) => setRename(e.target.value)}
+						/>
+						{isProject && (
+							<p>
+								Name is required. This does not change the working directory.
+							</p>
+						)}
+						<div className="actions">
+							<button
+								className="primary"
+								type="submit"
+								disabled={!rename.trim() || savingName}
+							>
+								Save name
+							</button>
+							<button type="button" onClick={() => setDialog(undefined)}>
+								Cancel
+							</button>
+						</div>
+					</form>
+				</section>
+			);
+		}
 		return (
 			dialog &&
 			subject && (
-				<NativeDialog
-					label={dialog === "rename" ? "Rename session" : "Move session"}
-					onDismiss={() => setDialog(undefined)}
-				>
+				<NativeDialog label="Move chat" onDismiss={() => setDialog(undefined)}>
 					<section>
-						<h2>{dialog === "rename" ? "Rename session" : "Move session"}</h2>
+						<h2>Move chat</h2>
 						<form
 							onSubmit={(e) => {
 								e.preventDefault();
 								void action(async () => {
-									const result = await window.orbit.call(
-										dialog === "rename" ? "rename-session" : "move-session",
-										{ ...subject, name: rename, targetProjectId: target },
-									);
+									const result = await window.orbit.call("move-session", {
+										...subject,
+										name: rename,
+										targetProjectId: target,
+									});
 									if (dialog === "move" && sessionId === subject.sessionId)
 										setProject(result.projectId);
 									setDialog(undefined);
 								});
 							}}
 						>
-							{dialog === "rename" ? (
-								<label>
-									Name{" "}
-									<input
-										aria-label="Session name"
-										value={rename}
-										required
-										maxLength={80}
-										onChange={(e) => setRename(e.target.value)}
-									/>
-								</label>
-							) : (
-								<>
-									<label>
-										Destination{" "}
-										<select
-											aria-label="Destination project"
-											value={target}
-											onChange={(e) => setTarget(e.target.value)}
-										>
-											<option value="">Chats · no project</option>
-											{state.projects
-												.filter(
-													(p) => !p.unassigned && p.id !== subject.projectId,
-												)
-												.map((p) => (
-													<option key={p.id} value={p.id}>
-														{p.name}
-													</option>
-												))}
-										</select>
-									</label>
-									<p>
-										History, files and working directory stay in their original
-										location. Future tasks use the destination project's
-										instructions. Linked schedules follow this chat.
-									</p>
-								</>
-							)}
+							<label>
+								Destination{" "}
+								<select
+									aria-label="Destination project"
+									value={target}
+									onChange={(e) => setTarget(e.target.value)}
+								>
+									<option value="">Chats · no project</option>
+									{state.projects
+										.filter((p) => !p.unassigned && p.id !== subject.projectId)
+										.map((p) => (
+											<option key={p.id} value={p.id}>
+												{p.name}
+											</option>
+										))}
+								</select>
+							</label>
+							<p>
+								History, files and working directory stay in their original
+								location. Future tasks use the destination project's
+								instructions. Linked schedules follow this chat.
+							</p>
 							<div className="actions">
 								<button type="submit" className="primary">
-									{dialog === "rename" ? "Save name" : "Move session"}
+									Move chat
 								</button>
 								<button type="button" onClick={() => setDialog(undefined)}>
 									Cancel
@@ -1022,10 +1186,18 @@ function App() {
 										</button>
 										<button
 											type="button"
+											className="icon-button"
+											aria-label={`New chat in ${p.name}`}
+											onClick={() => void newChat(p.id)}
+										>
+											<img src="assets/new-chat.svg" alt="" />
+										</button>
+										<button
+											type="button"
 											aria-label={`Project menu ${p.name}`}
 											onClick={(e) => showMenu(e, p.id)}
 										>
-											⋯
+											<img src="assets/more.svg" alt="" />
 										</button>
 									</div>
 									{p.sessions.map((s) => (
@@ -1040,10 +1212,10 @@ function App() {
 											</button>
 											<button
 												type="button"
-												aria-label={`Session menu ${s.name}`}
+												aria-label={`Chat menu ${s.name}`}
 												onClick={(e) => showMenu(e, p.id, s.id)}
 											>
-												⋯
+												<img src="assets/more.svg" alt="" />
 											</button>
 										</div>
 									))}
@@ -1065,10 +1237,10 @@ function App() {
 										</button>
 										<button
 											type="button"
-											aria-label={`Session menu ${s.name}`}
+											aria-label={`Chat menu ${s.name}`}
 											onClick={(e) => showMenu(e, p.id, s.id)}
 										>
-											⋯
+											<img src="assets/more.svg" alt="" />
 										</button>
 									</div>
 								)),
@@ -1091,14 +1263,14 @@ function App() {
 						{error}
 					</div>
 				)}
-				{renderProjectEditor()}
-				{renderRuntime()}
-				{renderConversation()}
-				{renderScheduleEditor()}
-				{renderScheduled()}
+				{!dialog && renderProjectEditor()}
+				{!dialog && renderRuntime()}
+				{!dialog && renderConversation()}
+				{!dialog && renderScheduleEditor()}
+				{!dialog && renderScheduled()}
+				{renderSessionDialog()}
 			</main>
 			{renderContextMenu()}
-			{renderSessionDialog()}
 		</div>
 	);
 }

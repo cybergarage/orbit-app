@@ -71,62 +71,62 @@ test("project create/edit cancel, session rename/move, outside/ESC dismissal and
 			projectId: state.projects.find((p: any) => p.name === "A").id,
 		});
 	});
-	await page.getByRole("button", { name: "Session 1", exact: true }).click();
+	await page.getByRole("button", { name: "Chat 1", exact: true }).click();
 	await page
-		.getByRole("button", { name: "Session menu Session 1", exact: true })
+		.getByRole("button", { name: "Chat menu Chat 1", exact: true })
 		.click();
 	await expect(page.getByRole("menu")).toBeVisible();
 	await page.keyboard.press("Escape");
 	await expect(page.getByRole("menu")).toHaveCount(0);
 	await expect(
-		page.getByRole("heading", { name: "Session 1", exact: true }),
+		page.getByRole("heading", { name: "Chat 1", exact: true }),
 	).toBeVisible();
 	await page
-		.getByRole("button", { name: "Session 1", exact: true })
+		.getByRole("button", { name: "Chat 1", exact: true })
 		.click({ button: "right" });
 	await expect(page.getByRole("menu")).toBeVisible();
 	// The click sits over Scheduled. The scrim must absorb it, without navigation.
 	await page.mouse.click(35, 112);
 	await expect(page.getByRole("menu")).toHaveCount(0);
 	await expect(
-		page.getByRole("heading", { name: "Session 1", exact: true }),
+		page.getByRole("heading", { name: "Chat 1", exact: true }),
 	).toBeVisible();
 	await page
-		.getByRole("button", { name: "Session menu Session 1", exact: true })
+		.getByRole("button", { name: "Chat menu Chat 1", exact: true })
 		.click();
 	await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
 	await expect(
-		page.getByRole("dialog", { name: "Rename session" }),
+		page.getByRole("heading", { name: "Rename chat" }),
 	).toBeVisible();
 	await page.screenshot({ path: "test-results/session-dialog.png" });
 	await page.keyboard.press("Escape");
 	await expect(page.getByRole("dialog")).toHaveCount(0);
 	await expect(
-		page.getByRole("heading", { name: "Session 1", exact: true }),
+		page.getByRole("heading", { name: "Chat 1", exact: true }),
 	).toBeVisible();
 	await page
-		.getByRole("button", { name: "Session menu Session 1", exact: true })
+		.getByRole("button", { name: "Chat menu Chat 1", exact: true })
 		.click();
 	await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
-	await page.getByLabel("Session name").fill("Renamed");
+	await page.getByLabel("Chat name *").fill("Renamed");
 	await page.getByRole("button", { name: "Cancel", exact: true }).click();
 	await expect(
-		page.getByRole("heading", { name: "Session 1", exact: true }),
+		page.getByRole("heading", { name: "Chat 1", exact: true }),
 	).toBeVisible();
 	await page
-		.getByRole("button", { name: "Session menu Session 1", exact: true })
+		.getByRole("button", { name: "Chat menu Chat 1", exact: true })
 		.click();
 	await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
-	await page.getByLabel("Session name").fill("Renamed");
+	await page.getByLabel("Chat name *").fill("Renamed");
 	await page.getByRole("button", { name: "Save name", exact: true }).click();
 	await page
-		.getByRole("button", { name: "Session menu Renamed", exact: true })
+		.getByRole("button", { name: "Chat menu Renamed", exact: true })
 		.click();
 	await page
 		.getByRole("menuitem", { name: "Move to project", exact: true })
 		.click();
 	await page.getByLabel("Destination project").selectOption({ label: "B" });
-	await page.getByRole("button", { name: "Move session", exact: true }).click();
+	await page.getByRole("button", { name: "Move chat", exact: true }).click();
 	await expect(
 		page.getByRole("heading", { name: "Renamed", exact: true }),
 	).toBeVisible();
@@ -256,7 +256,7 @@ test("persisted execution detail, interrupted state and disabled session menu us
 		.locator(".timeline")
 		.evaluate((element) => element.scrollTop);
 	await page
-		.getByRole("button", { name: "Session menu Recovering", exact: true })
+		.getByRole("button", { name: "Chat menu Recovering", exact: true })
 		.click();
 	await expect(
 		page.getByRole("menuitem", { name: "Rename", exact: true }),
@@ -277,7 +277,9 @@ test("persisted execution detail, interrupted state and disabled session menu us
 	await page.getByRole("button", { name: "View details", exact: true }).click();
 	await expect(page.getByText("Stored input", { exact: true })).toBeVisible();
 	await expect(page.getByText("No answer yet", { exact: true })).toBeVisible();
-	await expect(page.getByText(/approval-decision/)).toBeVisible();
+	await expect(
+		page.getByText("approval-decision", { exact: true }),
+	).toBeVisible();
 	await page.screenshot({ path: "test-results/execution-details.png" });
 	await app.close();
 });
@@ -368,4 +370,219 @@ test("real scheduler admission failure is durable and shown without an invented 
 	);
 	expect(saved.executions[0].status).toBe("failed");
 	expect(saved.executions[0].endedAt).toBeTruthy();
+});
+
+test("approved conversation, Debug overlay, project rename and real failed Retry retain user input", async () => {
+	const { root, launch } = await fixture();
+	const p = randomUUID(),
+		s = randomUUID();
+	const at = new Date().toISOString();
+	await fs.writeFile(
+		path.join(root, "state.json"),
+		JSON.stringify({
+			projects: [
+				{
+					id: p,
+					name: "Design verification",
+					sessions: [
+						{
+							id: s,
+							name: "Verify the layout",
+							status: "failed",
+							model: "deliberately-uninstalled-fixture-model",
+							events: [
+								{
+									id: randomUUID(),
+									type: "submission",
+									at,
+									data: {
+										prompt: "Preserve this arbitrary input",
+										requestId: randomUUID(),
+									},
+								},
+								{
+									id: randomUUID(),
+									type: "run",
+									at,
+									data: { phase: "failed", runId: "synthetic-raw-id" },
+								},
+								{
+									id: randomUUID(),
+									type: "error",
+									at,
+									data: "Synthetic runtime failure",
+								},
+								{
+									id: randomUUID(),
+									type: "result",
+									at,
+									data: {
+										answer: "A retained answer",
+										runtime: { outcome: "failed", reason: "Synthetic reason" },
+									},
+								},
+							],
+						},
+					],
+				},
+			],
+			schedules: [],
+		}),
+	);
+	const saved = JSON.parse(
+		await fs.readFile(path.join(root, "state.json"), "utf8"),
+	);
+	const completed = structuredClone(saved.projects[0].sessions[0]);
+	completed.id = randomUUID();
+	completed.name = "Completed conversation";
+	completed.status = "completed";
+	completed.events = completed.events.filter((event: any) =>
+		["submission", "result"].includes(event.type),
+	);
+	saved.projects[0].sessions.push(completed);
+	await fs.writeFile(path.join(root, "state.json"), JSON.stringify(saved));
+	let app = await launch();
+	let page = await app.firstWindow();
+	await app.evaluate(({ BrowserWindow }) =>
+		BrowserWindow.getAllWindows()[0].setSize(1440, 920),
+	);
+	await page
+		.getByRole("button", { name: "Completed conversation", exact: true })
+		.click();
+	await expect(page.locator(".chat-status")).toContainText("completed");
+	await page.screenshot({ path: "test-results/approved-normal.png" });
+	await page.getByRole("button", { name: "Debug", exact: true }).click();
+	await expect(
+		page.getByRole("button", { name: "Close Debug", exact: true }),
+	).toBeVisible();
+	const debugGeometry = await page.locator(".debug-pane").evaluate((pane) => {
+		const button = pane.querySelector(".debug-heading button");
+		const img = button?.querySelector("img");
+		const rect = pane.getBoundingClientRect(),
+			icon = img?.getBoundingClientRect();
+		return {
+			pane: rect.toJSON(),
+			icon: icon?.toJSON(),
+			loaded: (img as HTMLImageElement)?.naturalWidth,
+		};
+	});
+	await fs.writeFile(
+		"test-results/debug-geometry.json",
+		JSON.stringify(debugGeometry, null, 2),
+	);
+	expect(debugGeometry.loaded).toBeGreaterThan(0);
+	expect(debugGeometry.icon?.width).toBe(18);
+	expect(debugGeometry.icon?.right).toBeLessThan(debugGeometry.pane.right);
+	await page.screenshot({ path: "test-results/approved-normal-debug.png" });
+	await page.getByRole("button", { name: "Close Debug", exact: true }).click();
+	await page
+		.getByRole("button", { name: "Verify the layout", exact: true })
+		.click();
+	await expect(page.getByLabel("Task", { exact: true })).toHaveValue(
+		"Preserve this arbitrary input",
+	);
+	await expect(page.locator(".timeline")).not.toContainText("synthetic-raw-id");
+	await expect(page.locator(".timeline")).not.toContainText("Synthetic reason");
+	await expect(page.locator(".timeline")).toContainText(
+		"The task could not finish",
+	);
+	await expect(page.getByRole("button", { name: /Retry task/ })).toBeEnabled();
+	const boxes = await page
+		.locator(".timeline article")
+		.evaluateAll((elements) =>
+			elements.map((e) => ({
+				className: e.className,
+				x: e.getBoundingClientRect().x,
+				width: e.getBoundingClientRect().width,
+				right: e.getBoundingClientRect().right,
+			})),
+		);
+	expect(boxes[0].x).toBeGreaterThan(boxes[1].x);
+	await page.screenshot({ path: "test-results/approved-failure.png" });
+	await page.getByRole("button", { name: "Debug", exact: true }).click();
+	await expect(
+		page.getByRole("region", { name: "Debug details" }),
+	).toBeVisible();
+	await expect(page.locator(".debug-events")).toContainText("synthetic-raw-id");
+	await page.screenshot({ path: "test-results/approved-debug.png" });
+	await app.evaluate(({ BrowserWindow }) =>
+		BrowserWindow.getAllWindows()[0].setSize(1000, 920),
+	);
+	const overlap = await page.evaluate(() => {
+		const pane = document.querySelector(".debug-pane")?.getBoundingClientRect();
+		const chat = document
+			.querySelector(".chat-content")
+			?.getBoundingClientRect();
+		return !!pane && !!chat && pane.left < chat.right;
+	});
+	expect(overlap).toBe(true);
+	await page.screenshot({ path: "test-results/approved-narrow-debug.png" });
+	await page.getByRole("button", { name: "Close Debug", exact: true }).click();
+	await expect(page.getByRole("region", { name: "Debug details" })).toHaveCount(
+		0,
+	);
+	await expect(page.locator(".timeline")).toContainText(
+		"The task could not finish",
+	);
+	await page.screenshot({ path: "test-results/approved-narrow.png" });
+	await page
+		.getByLabel("Task", { exact: true })
+		.fill("Edited retry from real input");
+	await page.getByRole("button", { name: /Retry task/ }).click();
+	await expect(page.getByRole("alert")).toBeVisible({ timeout: 15000 });
+	await expect(page.getByLabel("Task", { exact: true })).toHaveValue(
+		"Edited retry from real input",
+	);
+	await page
+		.getByRole("button", {
+			name: "Project menu Design verification",
+			exact: true,
+		})
+		.click();
+	await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "Rename project", exact: true }),
+	).toBeVisible();
+	await page.getByLabel("Project name *").fill("A name chosen by the user");
+	await page.screenshot({ path: "test-results/approved-project-rename.png" });
+	await page.getByRole("button", { name: "Save name", exact: true }).click();
+	await expect(
+		page.getByRole("button", {
+			name: "⌄ A name chosen by the user",
+			exact: true,
+		}),
+	).toBeVisible();
+	await page
+		.getByRole("button", {
+			name: "New chat in A name chosen by the user",
+			exact: true,
+		})
+		.click();
+	await expect(
+		page.getByRole("heading", { name: "Chat 3", exact: true }),
+	).toBeVisible();
+	for (const icon of await page.locator("button img").all()) {
+		const dimensions = await icon.evaluate((e) => ({
+			loaded: (e as HTMLImageElement).naturalWidth > 0,
+			w: e.getBoundingClientRect().width,
+			h: e.getBoundingClientRect().height,
+			dock: !!e.closest(".dock"),
+		}));
+		expect(dimensions.loaded).toBe(true);
+		expect(dimensions.w).toBe(dimensions.dock ? 24 : 18);
+		expect(dimensions.h).toBe(dimensions.w);
+	}
+	await app.close();
+	app = await launch();
+	page = await app.firstWindow();
+	await expect(
+		page.getByRole("button", {
+			name: "⌄ A name chosen by the user",
+			exact: true,
+		}),
+	).toBeVisible();
+	expect(
+		(await fs.readdir(root)).some((name) => name.includes("pre-approved")),
+	).toBe(false);
+	await app.close();
 });

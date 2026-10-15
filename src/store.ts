@@ -26,15 +26,7 @@ export class Store {
 		} catch (e: any) {
 			if (e.code !== "ENOENT") throw e;
 		}
-		await fs
-			.copyFile(
-				path.join(this.root, "state.json"),
-				path.join(this.root, "state.pre-approved-ui.json"),
-				fs.constants.COPYFILE_EXCL,
-			)
-			.catch((e) => {
-				if (!["ENOENT", "EEXIST"].includes(e.code)) throw e;
-			});
+
 		this.state.executions ??= [];
 		for (const run of this.state.executions)
 			if (!run.endedAt) {
@@ -115,7 +107,7 @@ export class Store {
 		const p = this.project(projectId);
 		const s: DesktopSession = {
 			id: randomUUID(),
-			name: `Session ${p.sessions.length + 1}`,
+			name: `Chat ${p.sessions.length + 1}`,
 			events: [],
 			status: "idle",
 			storageProjectId: p.id,
@@ -238,6 +230,12 @@ export class Store {
 		const name = text(p.name, 80),
 			instructions = this.instructions(p.instructions);
 		Object.assign(project, { name, directory, instructions });
+		await this.save();
+		return project;
+	}
+	async renameProject(p: any) {
+		const project = this.project(p.projectId);
+		project.name = text(p.name, 80);
 		await this.save();
 		return project;
 	}

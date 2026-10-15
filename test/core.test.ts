@@ -349,7 +349,7 @@ test("moving a session retains Orbit storage and cwd, schedules follow membershi
 	);
 });
 
-test("active and recovery-pending sessions cannot move and legacy migration keeps a backup", async () => {
+test("active and recovery-pending sessions cannot move and legacy initialization does not create backups", async () => {
 	const root = await directory(),
 		p = randomUUID(),
 		s = randomUUID(),
@@ -368,11 +368,9 @@ test("active and recovery-pending sessions cannot move and legacy migration keep
 	await fs.writeFile(path.join(root, "state.json"), JSON.stringify(legacy));
 	const store = new Store(root);
 	await store.init();
-	assert.deepEqual(
-		JSON.parse(
-			await fs.readFile(path.join(root, "state.pre-approved-ui.json"), "utf8"),
-		),
-		legacy,
+	assert.equal(
+		(await fs.readdir(root)).some((name) => name.includes("pre-approved")),
+		false,
 	);
 	const session = store.session(p, s);
 	assert.equal(session.storageProjectId, p);
@@ -864,4 +862,37 @@ test("scheduled cancellation during health retains intent and cancellation class
 	assert.equal(run?.status, "cancelled");
 	assert.ok(run?.events.some((e) => e.type === "error"));
 	assert.ok(run?.events.some((e) => e.type === "cancel-requested"));
+});
+
+test("project rename preserves optional configuration and session storage across restart", async () => {
+	const root = await directory(),
+		store = new Store(root);
+	await store.init();
+	const project = await store.createProject(
+		"Original",
+		undefined,
+		"Retain these instructions",
+	);
+	const session = await store.createSession(project.id);
+	const before = structuredClone(session);
+	await assert.rejects(
+		store.renameProject({ projectId: project.id, name: "   " }),
+		/Invalid text/,
+	);
+	await store.renameProject({
+		projectId: project.id,
+		name: "  A custom project name  ",
+	});
+	const reopened = new Store(root);
+	await reopened.init();
+	assert.equal(reopened.project(project.id).name, "A custom project name");
+	assert.equal(
+		reopened.project(project.id).instructions,
+		"Retain these instructions",
+	);
+	assert.deepEqual(reopened.session(project.id, session.id), before);
+	assert.equal(
+		(await fs.readdir(root)).some((file) => file.includes("pre-approved")),
+		false,
+	);
 });

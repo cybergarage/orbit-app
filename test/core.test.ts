@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { Store, identifier } from "../src/store";
 import {
 	dockerArgs,
+	workerUserArgs,
 	modelRequest,
 	Worker,
 	verifySessionWriterReleased,
@@ -979,4 +980,13 @@ test("core-only names enforce revisions, replay, missing sessions and membership
 	);
 	assert.equal(session.name, "Core chat");
 	await sup.close();
+});
+
+test("Linux workers retain private host-directory ownership without root or chmod", () => {
+	assert.deepEqual(workerUserArgs("linux", 1001, 1002), [
+		"--user",
+		"1001:1002",
+	]);
+	assert.throws(() => workerUserArgs("linux", 0, 0), /non-root/);
+	assert.deepEqual(workerUserArgs("darwin", 501, 20), []);
 });

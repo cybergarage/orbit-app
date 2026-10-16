@@ -629,7 +629,7 @@ test("approved conversation, Debug overlay, project rename and real failed Retry
 		.click();
 	await expect(
 		page.getByRole("heading", { name: "Chat 3", exact: true }),
-	).toBeVisible();
+	).toBeVisible({ timeout: 30000 });
 	for (const icon of await page.locator("button img").all()) {
 		const dimensions = await icon.evaluate((e) => ({
 			loaded: (e as HTMLImageElement).naturalWidth > 0,

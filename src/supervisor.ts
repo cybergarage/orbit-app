@@ -671,7 +671,13 @@ export class Supervisor {
 			if (next !== undefined) s.nextAt = next;
 			await this.publish();
 			try {
-				await this.submit({ ...s, requestId: execution.requestId });
+				await this.submit({
+					projectId: execution.projectId,
+					sessionId: execution.sessionId,
+					prompt: execution.prompt,
+					model: execution.model,
+					requestId: execution.requestId,
+				});
 			} catch (e) {
 				const session = this.store.session(s.projectId, s.sessionId);
 				const cancelled =

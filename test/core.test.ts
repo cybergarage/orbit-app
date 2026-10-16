@@ -1101,3 +1101,57 @@ test("schedule creation retry retains the committed relative anchor and edited t
 	assert.equal(edited.nextAt, first.nextAt);
 	await sup.close();
 });
+
+test("editing a schedule during occurrence persistence cannot change the admitted input", async () => {
+	const sup = new Supervisor(await directory(), () => {});
+	await sup.init();
+	const project = await sup.store.createProject("Claim edit race"),
+		session = await sup.store.createSession(project.id);
+	const schedule: any = await sup.dispatch("schedule", {
+		projectId: project.id,
+		sessionId: session.id,
+		prompt: "Original occurrence input",
+		model: "original-model",
+		nextAt: Date.now() + 60000,
+		intervalMs: 3600000,
+	});
+	let entered = false,
+		release: () => void = () => {},
+		admitted: any;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const publish = sup.publish.bind(sup);
+	sup.publish = async () => {
+		if (!entered) {
+			entered = true;
+			await gate;
+		}
+		await publish();
+	};
+	sup.submit = async (input) => {
+		admitted = input;
+		return { accepted: true };
+	};
+	const ticking = sup.tick(schedule.nextAt);
+	try {
+		await waitFor(() => entered);
+		await sup.dispatch("update-schedule", {
+			id: schedule.id,
+			projectId: project.id,
+			sessionId: session.id,
+			prompt: "Edited future input",
+			model: "edited-model",
+		});
+		release();
+		await ticking;
+		assert.equal(admitted.prompt, "Original occurrence input");
+		assert.equal(admitted.model, "original-model");
+		assert.equal(sup.store.state.executions?.[0].prompt, admitted.prompt);
+		assert.equal(schedule.prompt, "Edited future input");
+	} finally {
+		release();
+		await ticking;
+		await sup.close();
+	}
+});

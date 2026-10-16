@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, nativeTheme } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Supervisor } from "./supervisor";
@@ -17,18 +17,31 @@ app.on("second-instance", () => {
 async function start() {
 	try {
 		await app.whenReady();
-		supervisor = new Supervisor(app.getPath("userData"), (state) => {
-			if (!window?.isDestroyed())
-				window?.webContents.send("orbit:state", state);
-		});
+		supervisor = new Supervisor(
+			app.getPath("userData"),
+			(state) => {
+				nativeTheme.themeSource = state.appearance ?? "system";
+				if (window && !window.isDestroyed())
+					window.setBackgroundColor(
+						nativeTheme.shouldUseDarkColors ? "#1d211f" : "#faf9f6",
+					);
+				if (!window?.isDestroyed())
+					window?.webContents.send("orbit:state", state);
+			},
+			undefined,
+			testMode && process.env.ORBIT_APP_LIVE !== "1"
+				? () => Promise.reject(new Error("Title model disabled in UI fixtures"))
+				: undefined,
+		);
 		await supervisor.init();
+		nativeTheme.themeSource = supervisor.store.state.appearance ?? "system";
 		window = new BrowserWindow({
 			width: 1250,
 			height: 840,
 			minWidth: 900,
 			minHeight: 620,
 			title: "Orbit App",
-			backgroundColor: "#faf9f6",
+			backgroundColor: nativeTheme.shouldUseDarkColors ? "#1d211f" : "#faf9f6",
 			webPreferences: {
 				preload: path.join(__dirname, "preload.cjs"),
 				contextIsolation: true,
@@ -45,7 +58,7 @@ async function start() {
 				event.senderFrame !== window.webContents.mainFrame ||
 				fileURLToPath(event.senderFrame.url) !== entry
 			)
-				throw Error("Untrusted IPC sender");
+				throw new Error("Untrusted IPC sender");
 			return supervisor.dispatch(command, payload);
 		});
 		await window.loadFile(entry);

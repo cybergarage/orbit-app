@@ -1,3 +1,4 @@
+import type { SchedulePlan } from "./scheduling";
 export interface EventRecord {
 	requestId?: string;
 	id?: string;
@@ -6,6 +7,14 @@ export interface EventRecord {
 	data: any;
 }
 export interface DesktopSession {
+	autoTitle?: {
+		stage: "new" | "pending" | "generating" | "done" | "failed" | "manual";
+		generation: number;
+		revision?: number;
+		prompt?: string;
+		model?: string;
+		operationId?: string;
+	};
 	id: string;
 	name: string;
 	nameRevision?: number;
@@ -26,6 +35,9 @@ export interface Project {
 	sessions: DesktopSession[];
 }
 export interface Schedule {
+	plan?: SchedulePlan;
+	creationId?: string;
+	creationInput?: string;
 	id: string;
 	projectId: string;
 	sessionId: string;
@@ -53,6 +65,7 @@ export interface Execution {
 	events: EventRecord[];
 }
 export interface Snapshot {
+	appearance?: "system" | "light" | "dark";
 	namesVersion?: number;
 	executions?: Execution[];
 	projects: Project[];

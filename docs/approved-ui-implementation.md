@@ -1,3 +1,33 @@
+# Approved UI follow-up — 2026-10-16
+
+Local worktree: `orbit-ui-next`, branch `feat/appearance-schedules-titles`, based on main `c8fc62a`. Earlier worktrees and their changes are preserved. No backup, stash, legacy-data migration or real-history initialization is performed.
+
+The follow-up uses approved Figma contexts for compact Home (`42:809`), Appearance (`9:78`, `79:3212`, `79:3306`), Status (`40:575`), scheduling (`9:80`, `71:2865`) and title generation (`75:2907`). All text uses 10px/15px. Home rows are 26px with 2px gaps; folder shape follows expansion independently of selection. Settings uses its own 40px category rows and keeps Status inside the existing global Settings destination. Appearance persists System/Light/Dark and applies throughout the renderer and initial native window. Figma icons are local SVG assets.
+
+## Scheduling contract
+
+New forms default to first run 15 minutes from successful creation and no repeat; reopening a new form resets those defaults. Relative creation retries use a stable operation ID and retain the committed anchor. Editing task/model alone preserves timing. Absolute past times retain inputs and show a corrective error. Preview and saved list show first/next time and IANA zone.
+
+Fixed intervals advance from the first planned instant, rather than completion time. Calendar daily/weekly/custom-day-or-week rules advance the original saved local date/time in the saved IANA zone. DST gaps shift forward by the gap; repeated local times choose the earlier offset once. Later dates return to the original wall time. Legacy elapsed intervals remain elapsed intervals until explicitly edited; editing the task alone also preserves legacy 24-hour intervals. Named IANA zones are required rather than fixed offsets. Relative calendar anchors retain seconds and milliseconds.
+
+The app runs schedules only while open. One tick is admitted at a time; active work delays scheduling. Missed slots coalesce to one attempt and the next slot advances beyond the current time without moving the original anchor. The execution ledger and next slot are saved before Worker admission. Admission uses that occurrence snapshot, so edits during persistence affect future occurrences without changing the recorded task/model. A crash may interrupt an attempt; startup records interruption and does not replay it automatically. This is not guaranteed delivery or an OS background service.
+
+## Automatic titles and naming
+
+Core 0.9.2 remains the pinned authoritative source of names, as established by main. No core dependency change or name migration is included here. New Chats save a whitespace-normalized first-input snippet (up to 40 Unicode characters) using the existing core Rename API before Worker start. Only after normal work settles idle does one bounded loopback Ollama call refine the title using the captured model and first input (up to 1000 characters). It receives no tools, files or conversation history; output is bounded, with a 15-second timeout and no automatic retry. Model failure, shutdown or new normal work retains the provisional title. Existing Chats are not automatically renamed.
+
+Revision and job-generation guards discard stale output. Manual rename invalidates generation before saving. New normal work aborts title generation before admission. Metadata helper operations are serialized per App instance; core revision/operation contracts remain authoritative across processes. Restart discards unfinished title jobs rather than silently restarting inference. Only job flags are added to App state; formal names stay in core.
+
+## Verification
+
+All tests use isolated synthetic roots. Unit lifecycle tests inject fake Workers/model generators; core metadata integration tests use the existing pinned image. Electron tests use real host IPC and metadata persistence. Opt-in live tests separately exercise the existing local model and Worker. Final validation: lint, typecheck, build and whitespace checks pass; all 42 unit/policy tests pass; all seven Electron UI tests pass; three opt-in existing-model live scenarios pass. The real Worker returned MAPLE-6382, cancelled with its container confirmed gone, returned READY on resend, and recalled MAPLE-6382 after moving the Chat and restarting. Automatic title generation produced Kyoto Weekend Itinerary while preserving the single OK answer, then survived restart. All live fixture roots were removed.
+
+Ignored `test-results/` retains normal/Debug/narrow/failure/Rename, Light/Dark/Status, Dark Debug and schedule screenshots, plus `live-approved.json`, `title-live.json` and `approval-live.json`. Screenshots were visually inspected. Local SVG load waits prevent premature capture and dimension checks. Earlier parallel test timeouts were resolved by waiting for asynchronous project creation/metadata preflight and rerunning the suites without competing Electron workloads.
+
+A real approval-required Bash call was verified with Debug closed: Approve and Deny remained visible, no tool completed before approval, the exact console-only command was checked before approving, and execution then returned APPROVAL-7264. No file writes or external services were used. Policy/approval lifecycle tests also pass. DST, missed slots, long work and restart recurrence are verified with controlled synthetic time rather than waiting through real calendar transitions. Schedules still require the App to be open. Remote CI is reported separately against the exact pushed PR head. Merge, release and deployment remain outside this change. No model download, image build/removal or user-history write is performed for local verification.
+
+---
+
 > Historical UI implementation record. Current core dependency and name ownership are described in [core-backed display names](core-display-names.md).
 
 # Approved Figma implementation update — 2026-10-15

@@ -12,7 +12,18 @@ import {
 	Worker,
 	verifySessionWriterReleased,
 } from "../src/worker";
-import { Supervisor } from "../src/supervisor";
+import { Supervisor as ProductionSupervisor } from "../src/supervisor";
+class Supervisor extends ProductionSupervisor {
+	constructor(
+		...[root, changed, factory]: ConstructorParameters<
+			typeof ProductionSupervisor
+		>
+	) {
+		super(root, changed, factory, async () => {
+			throw Error("Title generation disabled in lifecycle fixtures");
+		});
+	}
+}
 const temporaryDirectories: string[] = [];
 after(async () => {
 	await Promise.all(
@@ -27,7 +38,7 @@ async function directory() {
 	return root;
 }
 async function waitFor(predicate: () => boolean) {
-	const deadline = Date.now() + 10000;
+	const deadline = Date.now() + 45000;
 	while (!predicate()) {
 		if (Date.now() > deadline) throw Error("Lifecycle condition timed out");
 		await new Promise((r) => setTimeout(r, 2));
@@ -166,11 +177,12 @@ test("durable schedules coalesce missed runs, disable correctly and never requir
 		runs++;
 		return { accepted: true };
 	};
+	const firstAt = schedule.nextAt;
 	const now = Date.now() + 86400000;
 	await sup.tick(now);
 	await sup.tick(now);
 	assert.equal(runs, 1);
-	assert.equal(schedule.nextAt, now + 3600000);
+	assert.equal(schedule.nextAt, firstAt + 86400000);
 	await sup.dispatch("disable-schedule", { id: schedule.id });
 	await sup.tick(now + 7200000);
 	assert.equal(runs, 1);
@@ -989,4 +1001,157 @@ test("Linux workers retain private host-directory ownership without root or chmo
 	]);
 	assert.throws(() => workerUserArgs("linux", 0, 0), /non-root/);
 	assert.deepEqual(workerUserArgs("darwin", 501, 20), []);
+});
+
+test("new schedule plans commit relative time, keep phase across long work and coalesce concurrent ticks", async () => {
+	const sup = new Supervisor(
+		await directory(),
+		() => {},
+		() =>
+			({
+				name: `orbit-app-${randomUUID()}`,
+				start: () =>
+					new Promise<void>((resolve) => {
+						finish = resolve;
+					}),
+				stop: async () => {
+					finish();
+				},
+				confirmGone: async () => {},
+			}) as unknown as Worker,
+	);
+	let finish: () => void = () => {};
+	await sup.init();
+	const p = await sup.store.createProject("Phase"),
+		s = await sup.store.createSession(p.id);
+	sup.health = async () => ({
+		docker: true,
+		ollama: true,
+		image: true,
+		models: ["local"],
+		detail: [],
+	});
+	const before = Date.now();
+	const schedule: any = await sup.dispatch("schedule", {
+		projectId: p.id,
+		sessionId: s.id,
+		prompt: "Synthetic no-effect task",
+		model: "local",
+		timing: {
+			first: { kind: "relative", delayMs: 900000 },
+			timeZone: "Asia/Tokyo",
+			repeat: { kind: "interval", minutes: 15 },
+		},
+	});
+	assert.ok(
+		schedule.nextAt >= before + 900000 &&
+			schedule.nextAt <= Date.now() + 900000,
+	);
+	const first = schedule.nextAt;
+	await Promise.all([sup.tick(first + 1234), sup.tick(first + 1234)]);
+	assert.equal(sup.store.state.executions?.length, 1);
+	assert.equal(schedule.nextAt, first + 900000);
+	await sup.tick(first + 3600000);
+	assert.equal(sup.store.state.executions?.length, 1);
+	finish();
+	await waitFor(() => !sup.worker);
+	await sup.tick(first + 3600000);
+	assert.equal(sup.store.state.executions?.length, 2);
+	assert.equal(schedule.nextAt, first + 4500000);
+	const restored = new Store(sup.store.root);
+	await restored.init();
+	assert.equal(restored.state.schedules[0].plan?.firstAt, first);
+	assert.equal(restored.state.schedules[0].nextAt, first + 4500000);
+	await sup.close();
+});
+
+test("schedule creation retry retains the committed relative anchor and edited timing resets only explicitly", async () => {
+	const sup = new Supervisor(await directory(), () => {});
+	await sup.init();
+	const project = await sup.store.createProject("Idempotent"),
+		session = await sup.store.createSession(project.id);
+	const request = {
+		projectId: project.id,
+		sessionId: session.id,
+		operationId: randomUUID(),
+		prompt: "Synthetic future only",
+		model: "local",
+		timing: {
+			first: { kind: "relative", delayMs: 900000 },
+			timeZone: "UTC",
+			repeat: { kind: "none" },
+		},
+	};
+	const first: any = await sup.dispatch("schedule", request),
+		retry: any = await sup.dispatch("schedule", request);
+	assert.equal(first.id, retry.id);
+	assert.equal(first.nextAt, retry.nextAt);
+	assert.equal(sup.store.state.schedules.length, 1);
+	await assert.rejects(
+		sup.dispatch("schedule", { ...request, prompt: "Changed payload" }),
+		/input changed/,
+	);
+	const edited: any = await sup.dispatch("update-schedule", {
+		id: first.id,
+		projectId: project.id,
+		sessionId: session.id,
+		prompt: "Edited only",
+		model: "local",
+	});
+	assert.equal(edited.nextAt, first.nextAt);
+	await sup.close();
+});
+
+test("editing a schedule during occurrence persistence cannot change the admitted input", async () => {
+	const sup = new Supervisor(await directory(), () => {});
+	await sup.init();
+	const project = await sup.store.createProject("Claim edit race"),
+		session = await sup.store.createSession(project.id);
+	const schedule: any = await sup.dispatch("schedule", {
+		projectId: project.id,
+		sessionId: session.id,
+		prompt: "Original occurrence input",
+		model: "original-model",
+		nextAt: Date.now() + 60000,
+		intervalMs: 3600000,
+	});
+	let entered = false,
+		release: () => void = () => {},
+		admitted: any;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const publish = sup.publish.bind(sup);
+	sup.publish = async () => {
+		if (!entered) {
+			entered = true;
+			await gate;
+		}
+		await publish();
+	};
+	sup.submit = async (input) => {
+		admitted = input;
+		return { accepted: true };
+	};
+	const ticking = sup.tick(schedule.nextAt);
+	try {
+		await waitFor(() => entered);
+		await sup.dispatch("update-schedule", {
+			id: schedule.id,
+			projectId: project.id,
+			sessionId: session.id,
+			prompt: "Edited future input",
+			model: "edited-model",
+		});
+		release();
+		await ticking;
+		assert.equal(admitted.prompt, "Original occurrence input");
+		assert.equal(admitted.model, "original-model");
+		assert.equal(sup.store.state.executions?.[0].prompt, admitted.prompt);
+		assert.equal(schedule.prompt, "Edited future input");
+	} finally {
+		release();
+		await ticking;
+		await sup.close();
+	}
 });

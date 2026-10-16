@@ -11,9 +11,9 @@ A local Electron desktop prototype for local agent work. Create a project and se
 
 ## Desktop preview
 
-![Orbit App showing a completed chat with user messages on the right and answers on the left, using synthetic demo data](docs/assets/orbit-app-demo.png)
+![Current Orbit App in Light appearance, showing compact Project and Chat rows and a completed synthetic conversation with Debug closed](docs/assets/orbit-app-demo.png)
 
-Actual Electron UI showing the normal conversation view with Debug closed. Project names, messages, and results are synthetic demo data.
+Current Electron UI in Light appearance, with compact Project/Chat navigation, user messages on the right, answers on the left, and Debug closed. Captured from the running app using isolated synthetic demo data; no real tasks or personal information are shown.
 
 ## About Orbit
 
@@ -51,7 +51,9 @@ The unsigned arm64 app still requires Docker, Ollama, and the locally built work
 - Home/new-chat, project creation and editing with optional directory/instructions, session rename/move, conversation model selection, runtime health, operation approvals, cancellation, saved history, and top-level artifact listing.
 - Scheduled definitions and a separate execution history with input, answer, operation/approval events and failure/interruption details.
 - Session moves preserve original Orbit storage and working directory. Changing a project directory affects new chats only; project guidance affects future tasks. Running or recovery-pending sessions cannot move. Project/Chat names use Orbit core 0.9.2 APIs. Legacy App registries are rejected without migration or data deletion.
-- Durable one-time, hourly, and every-24-hour schedules. **The app must be running.** After shutdown, at most one missed occurrence is considered; interrupted work is not automatically replayed. There is no background daemon.
+- Saved System/Light/Dark appearance and compact Project/Chat navigation, with Settings categories for Appearance and real runtime Status.
+- One-time, fixed-interval and calendar schedules with a saved IANA time zone. Relative first runs start from successful creation; fixed intervals keep their planned anchor, while daily/weekly rules keep local wall time. **The app must be running.** Missed occurrences coalesce; interrupted work is not automatically replayed. There is no background daemon.
+- First-input Chat titles are saved through core before Worker admission. A bounded local model call may refine the title after the task settles; manual names take priority.
 - Intended for trusted local workspaces. Workers have no network access and receive only their project's workspace/core mounts, without host credentials or the Docker socket. This is not a complete sandbox guarantee: approved Bash can modify the project's core records.
 - Per-file limits and a storage watchdog are **not a hard disk quota**; rapid writes can still consume host disk space.
 - Orbit's pinned `braces@3.0.3` dependency has an unpatched DoS advisory. Restricted search syntax mitigates the direct glob/grep path, but an approved Bash script can still invoke the vulnerable dependency.

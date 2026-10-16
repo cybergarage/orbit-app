@@ -13,7 +13,7 @@ export function workerUserArgs(
 ) {
 	if (platform !== "linux") return [];
 	if (uid === undefined || gid === undefined || uid === 0)
-		throw Error("Linux workers require a non-root host user");
+		throw new Error("Linux workers require a non-root host user");
 	return ["--user", `${uid}:${gid}`];
 }
 export function dockerArgs(name: string, workspace: string, core: string) {

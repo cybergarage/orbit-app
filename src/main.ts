@@ -14,9 +14,9 @@ app.on("second-instance", () => {
 	window?.show();
 	window?.focus();
 });
-void app
-	.whenReady()
-	.then(async () => {
+async function start() {
+	try {
+		await app.whenReady();
 		supervisor = new Supervisor(app.getPath("userData"), (state) => {
 			if (!window?.isDestroyed())
 				window?.webContents.send("orbit:state", state);
@@ -54,11 +54,12 @@ void app
 			15000,
 		);
 		void supervisor.health();
-	})
-	.catch((error) => {
+	} catch (error) {
 		dialog.showErrorBox("Orbit App could not open its data", String(error));
 		app.exit(1);
-	});
+	}
+}
+void start();
 app.on("window-all-closed", () => app.quit());
 app.on("before-quit", (event) => {
 	if (closing) return;

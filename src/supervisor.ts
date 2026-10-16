@@ -402,13 +402,13 @@ export class Supervisor {
 	private requireRenameRevision(p: any) {
 		identifier(p.operationId);
 		if (!Number.isSafeInteger(p.expectedRevision) || p.expectedRevision < 0)
-			throw Error(
+			throw new Error(
 				"Expected name revision is required; refresh before renaming",
 			);
 	}
 
 	dispatch(commandName: string, p: any = {}) {
-		if (this.closed) return Promise.reject(Error("App is closing"));
+		if (this.closed) return Promise.reject(new Error("App is closing"));
 		const operation = this.dispatchCommand(commandName, p);
 		this.operations.add(operation);
 		void operation
@@ -614,7 +614,7 @@ export class Supervisor {
 	async close() {
 		this.closed = true;
 		await this.cancel();
-		await Promise.allSettled([...this.operations]);
+		await Promise.allSettled(this.operations);
 		await this.saveQueue;
 	}
 }

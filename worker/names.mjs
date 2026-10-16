@@ -37,7 +37,7 @@ export async function names(
 					id: request.projectId,
 				});
 				if (!project)
-					throw Error("Core project not found; refresh before editing");
+					throw new Error("Core project not found; refresh before editing");
 				return project;
 			}
 			case "rename-project":
@@ -54,7 +54,7 @@ export async function names(
 						exclusiveStorageControl: true,
 					});
 				if (await repository.findById(request.sessionId))
-					throw Error("Core session already exists");
+					throw new Error("Core session already exists");
 				const session = repository.create({
 					id: request.sessionId,
 					cwd: "/workspace",
@@ -67,17 +67,16 @@ export async function names(
 				return { revision: 0 };
 			}
 			case "read-sessions": {
-				const results = [];
-				for (const id of request.sessionIds) {
-					const session = await repository.findById(id);
-					if (!session) throw Error(`Core session not found: ${id}`);
-					results.push({
+				const sessions = repository.list();
+				return request.sessionIds.map((id) => {
+					const session = sessions.find((item) => item.id === id);
+					if (!session) throw new Error(`Core session not found: ${id}`);
+					return {
 						id,
 						name: sessionDisplayName(session),
 						revision: session.titleRevision,
-					});
-				}
-				return results;
+					};
+				});
 			}
 			case "rename-session": {
 				const session = await repository.rename(request.sessionId, {
@@ -91,7 +90,7 @@ export async function names(
 				};
 			}
 			default:
-				throw Error("Unknown core metadata operation");
+				throw new Error("Unknown core metadata operation");
 		}
 	} finally {
 		await catalog.close();
@@ -100,7 +99,8 @@ export async function names(
 
 if (process.argv[1]?.endsWith("/names.mjs")) {
 	const lines = createInterface({ input: process.stdin });
-	for await (const line of lines) {
+	const { value: line, done } = await lines[Symbol.asyncIterator]().next();
+	if (!done) {
 		try {
 			process.stdout.write(
 				`${JSON.stringify({ result: await names(JSON.parse(line)) })}\n`,
@@ -111,7 +111,6 @@ if (process.argv[1]?.endsWith("/names.mjs")) {
 			);
 			process.exitCode = 1;
 		}
-		break;
 	}
 	lines.close();
 }

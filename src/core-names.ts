@@ -12,7 +12,7 @@ export class ContainerCoreNames implements CoreNames {
 		if (request.command !== "create-project") {
 			await fs.access(path.join(catalog, "projects.sqlite"));
 			if (!(await fs.stat(core)).isDirectory())
-				throw Error("Core storage directory is missing");
+				throw new Error("Core storage directory is missing");
 		} else {
 			await fs.mkdir(catalog, { recursive: true, mode: 0o700 });
 			await fs.mkdir(core, { recursive: true, mode: 0o700 });
@@ -23,7 +23,7 @@ export class ContainerCoreNames implements CoreNames {
 			core,
 		);
 		const image = args.pop();
-		if (!image) throw Error("Missing worker image");
+		if (!image) throw new Error("Missing worker image");
 		// Catalog mounts replace the workspace mount for metadata-only operations.
 		const mount = args.findIndex((arg) => arg.endsWith("dst=/workspace"));
 		args[mount] = `type=bind,src=${catalog},dst=/catalog`;
@@ -44,7 +44,7 @@ export class ContainerCoreNames implements CoreNames {
 			const timer = setTimeout(() => {
 				child.kill("SIGKILL");
 				reject(
-					Error("Core metadata request timed out; refresh before retrying"),
+					new Error("Core metadata request timed out; refresh before retrying"),
 				);
 			}, 30000);
 			child.stdout.on("data", (bytes) => {
@@ -63,13 +63,13 @@ export class ContainerCoreNames implements CoreNames {
 				try {
 					const result = JSON.parse(output);
 					if (code !== 0)
-						throw Error(
+						throw new Error(
 							result.error || error || "Core metadata process failed",
 						);
-					if (result.error) throw Error(result.error);
+					if (result.error) throw new Error(result.error);
 					resolve(result.result);
 				} catch (e) {
-					reject(Error(error || String(e)));
+					reject(new Error(error || String(e)));
 				}
 			});
 			child.stdin.on("error", () => {});

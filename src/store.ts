@@ -32,13 +32,18 @@ export class Store {
 		}
 
 		if (this.state.projects.length && this.state.namesVersion !== 1)
-			throw Error(
+			throw new Error(
 				`Legacy App names are unsupported at ${this.root}. Existing data was not changed. Use a fresh data directory after explicitly handling the old data.`,
 			);
 		await this.refreshNames();
 		this.state.namesVersion = 1;
 		this.state.executions ??= [];
-		for (const run of this.state.executions)
+		this.restoreRuntimeState();
+
+		await this.save();
+	}
+	private restoreRuntimeState() {
+		for (const run of this.state.executions ?? [])
 			if (!run.endedAt) {
 				run.status = "interrupted";
 				run.endedAt = Date.now();
@@ -69,9 +74,8 @@ export class Store {
 						data: "App exited before completion. Inspect history before submitting again.",
 					});
 				}
-
-		await this.save();
 	}
+
 	async save() {
 		const data = JSON.stringify({
 			...this.state,
@@ -100,33 +104,47 @@ export class Store {
 		await this.writes;
 	}
 	async refreshNames() {
-		for (const project of this.state.projects) {
-			const named = await this.names.call(this.core(project.id), {
-				command: "read-project",
-				projectId: project.id,
-			});
-			if (named.revision >= (project.nameRevision ?? 0)) {
-				project.name = named.name;
-				project.nameRevision = named.revision;
-			}
-			const groups = new Map<string, DesktopSession[]>();
-			for (const session of project.sessions) {
-				const original = session.storageProjectId ?? project.id;
-				groups.set(original, [...(groups.get(original) ?? []), session]);
-			}
-			for (const [original, sessions] of groups) {
-				const titles = await this.names.call(this.core(original), {
-					command: "read-sessions",
-					sessionIds: sessions.map((item) => item.id),
-				});
-				for (const session of sessions) {
-					const title = titles.find((item: any) => item.id === session.id);
-					if (!title) throw Error("Missing core session title");
-					if (title.revision >= (session.nameRevision ?? 0)) {
-						session.name = title.name;
-						session.nameRevision = title.revision;
-					}
-				}
+		// Serialize readers: opening one container per project concurrently is unbounded.
+		await this.state.projects.reduce(
+			(previous, project) =>
+				previous.then(() => this.refreshProjectNames(project)),
+			Promise.resolve(),
+		);
+	}
+	private async refreshProjectNames(project: Project) {
+		const named = await this.names.call(this.core(project.id), {
+			command: "read-project",
+			projectId: project.id,
+		});
+		if (named.revision >= (project.nameRevision ?? 0)) {
+			project.name = named.name;
+			project.nameRevision = named.revision;
+		}
+		const groups = new Map<string, DesktopSession[]>();
+		for (const session of project.sessions) {
+			const original = session.storageProjectId ?? project.id;
+			groups.set(original, [...(groups.get(original) ?? []), session]);
+		}
+		await [...groups].reduce(
+			(previous, [original, sessions]) =>
+				previous.then(() => this.refreshSessionNames(original, sessions)),
+			Promise.resolve(),
+		);
+	}
+	private async refreshSessionNames(
+		original: string,
+		sessions: DesktopSession[],
+	) {
+		const titles = await this.names.call(this.core(original), {
+			command: "read-sessions",
+			sessionIds: sessions.map((session) => session.id),
+		});
+		for (const session of sessions) {
+			const title = titles.find((item: any) => item.id === session.id);
+			if (!title) throw new Error("Missing core session title");
+			if (title.revision >= (session.nameRevision ?? 0)) {
+				session.name = title.name;
+				session.nameRevision = title.revision;
 			}
 		}
 	}
@@ -319,7 +337,7 @@ export class Store {
 	async renameProject(p: any) {
 		const project = this.project(p.projectId);
 		if (this.state.active?.projectId === project.id)
-			throw Error("Running project cannot be renamed");
+			throw new Error("Running project cannot be renamed");
 		const named = await this.names.call(this.core(project.id), {
 			command: "rename-project",
 			projectId: project.id,

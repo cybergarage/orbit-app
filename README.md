@@ -11,9 +11,9 @@ A local Electron desktop prototype for local agent work. Create a project and se
 
 ## Desktop preview
 
-![Orbit App showing a completed chat with user messages on the right and answers on the left, using synthetic demo data](docs/assets/orbit-app-demo.png)
+![Current Orbit App in Light appearance, showing compact Project and Chat rows and a completed synthetic conversation with Debug closed](docs/assets/orbit-app-demo.png)
 
-Actual Electron UI showing the normal conversation view with Debug closed. Project names, messages, and results are synthetic demo data.
+Current Electron UI in Light appearance, with compact Project/Chat navigation, user messages on the right, answers on the left, and Debug closed. Captured from the running app using isolated synthetic demo data; no real tasks or personal information are shown.
 
 ## About Orbit
 

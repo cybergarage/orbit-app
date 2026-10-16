@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { Store, identifier } from "../src/store";
 import {
 	dockerArgs,
+	workerUserArgs,
 	modelRequest,
 	Worker,
 	verifySessionWriterReleased,
@@ -349,47 +350,44 @@ test("moving a session retains Orbit storage and cwd, schedules follow membershi
 	);
 });
 
-test("active and recovery-pending sessions cannot move and legacy initialization does not create backups", async () => {
-	const root = await directory(),
-		p = randomUUID(),
-		s = randomUUID(),
-		target = randomUUID();
-	const legacy = {
-		projects: [
-			{
-				id: p,
-				name: "Legacy",
-				sessions: [{ id: s, name: "Old", status: "idle", events: [] }],
-			},
-			{ id: target, name: "Target", sessions: [] },
-		],
+test("legacy names fail closed without writes; active names and moves are protected", async () => {
+	const legacyRoot = await directory();
+	const bytes = JSON.stringify({
+		projects: [{ id: randomUUID(), name: "Do not migrate", sessions: [] }],
 		schedules: [],
-	};
-	await fs.writeFile(path.join(root, "state.json"), JSON.stringify(legacy));
-	const store = new Store(root);
-	await store.init();
+	});
+	await fs.writeFile(path.join(legacyRoot, "state.json"), bytes);
+	await assert.rejects(new Store(legacyRoot).init(), /Legacy App names/);
 	assert.equal(
-		(await fs.readdir(root)).some((name) => name.includes("pre-approved")),
-		false,
+		await fs.readFile(path.join(legacyRoot, "state.json"), "utf8"),
+		bytes,
 	);
-	const session = store.session(p, s);
-	assert.equal(session.storageProjectId, p);
-	assert.equal(session.workspace, store.workspace(p));
-	session.status = "recovery-blocked";
-	await assert.rejects(
-		store.moveSession({ projectId: p, sessionId: s, targetProjectId: target }),
-		/cannot be moved/,
-	);
-	session.status = "idle";
-	store.state.active = { projectId: p, sessionId: s };
-	await assert.rejects(
-		store.moveSession({ projectId: p, sessionId: s, targetProjectId: target }),
-		/cannot be moved/,
-	);
-	assert.equal(store.project(p).sessions.length, 1);
-	assert.equal(store.project(target).sessions.length, 0);
-	await assert.rejects(store.directory(os.homedir()), /cannot be worker/);
-	await assert.rejects(store.directory("/etc"), /cannot be worker/);
+	const root = await directory(),
+		store = new Store(root);
+	await store.init();
+	const project = await store.createProject("Source"),
+		destination = await store.createProject("Target"),
+		session = await store.createSession(project.id);
+	for (const status of ["recovery-blocked", "running", "awaiting-approval"]) {
+		session.status = status;
+		await assert.rejects(
+			store.moveSession({
+				projectId: project.id,
+				sessionId: session.id,
+				targetProjectId: destination.id,
+			}),
+			/cannot be moved/,
+		);
+		await assert.rejects(
+			store.renameSession({
+				projectId: project.id,
+				sessionId: session.id,
+				name: "Blocked",
+			}),
+			/cannot be moved/,
+		);
+	}
+	assert.equal((await fs.readdir(legacyRoot)).length, 1);
 });
 
 test("schedule occurrence captures admission failures without fabricated answers and restart interrupts unfinished executions", async () => {
@@ -895,4 +893,100 @@ test("project rename preserves optional configuration and session storage across
 		(await fs.readdir(root)).some((file) => file.includes("pre-approved")),
 		false,
 	);
+});
+
+test("core-only names enforce revisions, replay, missing sessions and membership authorization", async () => {
+	const root = await directory(),
+		sup = new Supervisor(root, () => {});
+	await sup.init();
+	const project = await sup.store.createProject("Core project"),
+		other = await sup.store.createProject("Destination"),
+		session = await sup.store.createSession(project.id);
+	const sessionRequest = {
+		projectId: project.id,
+		sessionId: session.id,
+		name: "Core chat",
+		expectedRevision: session.nameRevision,
+		operationId: randomUUID(),
+	};
+	await sup.dispatch("rename-session", sessionRequest);
+	await sup.dispatch("rename-session", sessionRequest); // exact operation replay
+	assert.equal(session.nameRevision, 2);
+	await assert.rejects(
+		sup.dispatch("rename-session", {
+			...sessionRequest,
+			name: "Changed operation",
+		}),
+		/changed|conflict/i,
+	);
+	await assert.rejects(
+		sup.dispatch("rename-session", {
+			...sessionRequest,
+			operationId: randomUUID(),
+		}),
+		/revision|conflict/i,
+	);
+	assert.equal(session.name, "Core chat");
+	await assert.rejects(
+		sup.dispatch("rename-session", { ...sessionRequest, projectId: other.id }),
+		/not found/,
+	);
+	const revision = project.nameRevision;
+	const attempts = await Promise.allSettled(
+		["First", "Second"].map((name) =>
+			sup.dispatch("rename-project", {
+				projectId: project.id,
+				name,
+				expectedRevision: revision,
+				operationId: randomUUID(),
+			}),
+		),
+	);
+	assert.equal(
+		attempts.filter((item) => item.status === "fulfilled").length,
+		1,
+	);
+	assert.equal(attempts.filter((item) => item.status === "rejected").length, 1);
+	const saved = JSON.parse(
+		await fs.readFile(path.join(root, "state.json"), "utf8"),
+	);
+	assert.equal("name" in saved.projects[0], false);
+	assert.equal("name" in saved.projects[0].sessions[0], false);
+	await sup.store.moveSession({
+		projectId: project.id,
+		sessionId: session.id,
+		targetProjectId: other.id,
+	});
+	const reopened = new Store(root);
+	await reopened.init();
+	assert.equal(reopened.session(other.id, session.id).name, "Core chat");
+	assert.equal(reopened.session(other.id, session.id).nameRevision, 2);
+	const files = await fs.readdir(
+		path.join(root, "projects", project.id, "core", "sessions"),
+		{ recursive: true },
+	);
+	const transcript = files.find((file) => file.endsWith(".jsonl"));
+	assert.ok(transcript);
+	await fs.unlink(
+		path.join(root, "projects", project.id, "core", "sessions", transcript),
+	);
+	await assert.rejects(
+		sup.store.renameSession({
+			projectId: other.id,
+			sessionId: session.id,
+			name: "Missing",
+		}),
+		/not found/,
+	);
+	assert.equal(session.name, "Core chat");
+	await sup.close();
+});
+
+test("Linux workers retain private host-directory ownership without root or chmod", () => {
+	assert.deepEqual(workerUserArgs("linux", 1001, 1002), [
+		"--user",
+		"1001:1002",
+	]);
+	assert.throws(() => workerUserArgs("linux", 0, 0), /non-root/);
+	assert.deepEqual(workerUserArgs("darwin", 501, 20), []);
 });

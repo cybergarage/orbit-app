@@ -8,6 +8,7 @@ export interface EventRecord {
 export interface DesktopSession {
 	id: string;
 	name: string;
+	nameRevision?: number;
 	storageProjectId?: string;
 	workspace?: string;
 	model?: string;
@@ -18,6 +19,7 @@ export interface DesktopSession {
 export interface Project {
 	id: string;
 	name: string;
+	nameRevision?: number;
 	directory?: string;
 	instructions?: string;
 	unassigned?: boolean;
@@ -51,6 +53,7 @@ export interface Execution {
 	events: EventRecord[];
 }
 export interface Snapshot {
+	namesVersion?: number;
 	executions?: Execution[];
 	projects: Project[];
 	schedules: Schedule[];

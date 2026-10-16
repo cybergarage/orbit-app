@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { ContainerCoreNames } from "../../src/core-names";
 const testRoots: string[] = [];
 const testApps: Awaited<ReturnType<typeof electron.launch>>[] = [];
 test.afterEach(async () => {
@@ -19,6 +20,40 @@ async function fixture() {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-approved-ui-"));
 	testRoots.push(root);
 	const launch = async () => {
+		const stateFile = path.join(root, "state.json");
+		const seed = await fs
+			.readFile(stateFile, "utf8")
+			.then(JSON.parse)
+			.catch(() => undefined);
+		if (seed?.projects?.length && seed.namesVersion !== 1) {
+			const names = new ContainerCoreNames(root);
+			for (const project of seed.projects) {
+				const core = path.join(root, "projects", project.id, "core");
+				await names.call(core, {
+					command: "create-project",
+					projectId: project.id,
+					name: project.name,
+				});
+				for (const session of project.sessions) {
+					await names.call(core, {
+						command: "create-session",
+						sessionId: session.id,
+						name: session.name,
+						operationId: randomUUID(),
+					});
+					await names.call(core, {
+						command: "rename-session",
+						sessionId: session.id,
+						name: session.name,
+						expectedRevision: 0,
+						operationId: randomUUID(),
+					});
+				}
+			}
+			seed.namesVersion = 1;
+			await fs.writeFile(stateFile, JSON.stringify(seed));
+		}
+
 		const app = await electron.launch({
 			args: process.env.CI ? [".", "--no-sandbox"] : ["."],
 			env: { ...process.env, ORBIT_APP_TEST: "1", ORBIT_APP_DATA: root },
@@ -147,6 +182,9 @@ test("project create/edit cancel, session rename/move, outside/ESC dismissal and
 	await page.getByLabel("Project name *").fill("Edited B");
 	await page.getByLabel("Instructions · optional").fill("Project guidance");
 	await page.getByRole("button", { name: "Save project", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "What can I help with?", exact: true }),
+	).toBeVisible();
 	await page.getByRole("button", { name: "Scheduled", exact: true }).click();
 	await page
 		.getByRole("button", { name: "Execution history", exact: true })
@@ -188,7 +226,8 @@ test("project create/edit cancel, session rename/move, outside/ESC dismissal and
 	expect(
 		JSON.parse(
 			await fs.readFile(path.join(root, "state.json"), "utf8"),
-		).projects.find((p: any) => p.name === "Edited B").instructions,
+		).projects.find((p: any) => p.instructions === "Project guidance")
+			.instructions,
 	).toBe("Project guidance");
 });
 
@@ -260,7 +299,7 @@ test("persisted execution detail, interrupted state and disabled session menu us
 		.click();
 	await expect(
 		page.getByRole("menuitem", { name: "Rename", exact: true }),
-	).toBeEnabled();
+	).toBeDisabled();
 	await expect(
 		page.getByRole("menuitem", { name: "Move to project", exact: true }),
 	).toBeDisabled();
@@ -584,5 +623,65 @@ test("approved conversation, Debug overlay, project rename and real failed Retry
 	expect(
 		(await fs.readdir(root)).some((name) => name.includes("pre-approved")),
 	).toBe(false);
+	await app.close();
+});
+
+test("core revision conflict keeps the editor input and authoritative title through restart", async () => {
+	const { root, launch } = await fixture();
+	let app = await launch(),
+		page = await app.firstWindow();
+	await page
+		.getByRole("button", { name: "+ New project", exact: true })
+		.click();
+	await page.getByLabel("Project name *").fill("Core UI project");
+	await page
+		.getByRole("button", { name: "Create project", exact: true })
+		.click();
+	await page
+		.getByRole("button", { name: "New chat in Core UI project", exact: true })
+		.click();
+	await page
+		.getByRole("button", { name: "Chat menu Chat 1", exact: true })
+		.click();
+	await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+	await page.getByLabel("Chat name *").fill("Unsaved editor title");
+	const state = await page.evaluate(() => window.orbit.call("snapshot"));
+	const project = state.projects[0],
+		session = project.sessions[0];
+	const core = new ContainerCoreNames(root);
+	await core.call(path.join(root, "projects", project.id, "core"), {
+		command: "rename-session",
+		sessionId: session.id,
+		name: "External core title",
+		expectedRevision: session.nameRevision,
+		operationId: randomUUID(),
+	});
+	await page.getByRole("button", { name: "Save name", exact: true }).click();
+	await expect(page.getByRole("alert")).toContainText(/revision|conflict/i);
+	await expect(page.getByLabel("Chat name *")).toHaveValue(
+		"Unsaved editor title",
+	);
+	await expect(
+		page.getByRole("button", { name: "External core title", exact: true }),
+	).toBeVisible();
+	await page.screenshot({ path: "test-results/core-title-conflict.png" });
+	await page.getByRole("button", { name: "Cancel", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "External core title", exact: true }),
+	).toBeVisible();
+	await app.close();
+	app = await launch();
+	page = await app.firstWindow();
+	await page
+		.getByRole("button", { name: "External core title", exact: true })
+		.click();
+	await expect(
+		page.getByRole("heading", { name: "External core title", exact: true }),
+	).toBeVisible();
+	const saved = JSON.parse(
+		await fs.readFile(path.join(root, "state.json"), "utf8"),
+	);
+	expect(saved.projects[0].name).toBeUndefined();
+	expect(saved.projects[0].sessions[0].name).toBeUndefined();
 	await app.close();
 });

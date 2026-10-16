@@ -3,13 +3,24 @@ import { createInterface } from "node:readline";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-export const image = "docker.io/library/orbit-app-worker:0.1.0";
+export const image = "docker.io/library/orbit-app-worker:core-0.9.2";
 export const dockerPath =
 	process.platform === "darwin" ? "/usr/local/bin/docker" : "docker";
+export function workerUserArgs(
+	platform = process.platform,
+	uid = process.getuid?.(),
+	gid = process.getgid?.(),
+) {
+	if (platform !== "linux") return [];
+	if (uid === undefined || gid === undefined || uid === 0)
+		throw new Error("Linux workers require a non-root host user");
+	return ["--user", `${uid}:${gid}`];
+}
 export function dockerArgs(name: string, workspace: string, core: string) {
 	return [
 		"run",
 		"--rm",
+		"--pull=never",
 		"-i",
 		"--name",
 		name,
@@ -36,6 +47,7 @@ export function dockerArgs(name: string, workspace: string, core: string) {
 		`type=bind,src=${workspace},dst=/workspace`,
 		"--mount",
 		`type=bind,src=${core},dst=/state`,
+		...workerUserArgs(),
 		image,
 	];
 }

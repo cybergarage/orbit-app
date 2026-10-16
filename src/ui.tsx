@@ -227,6 +227,8 @@ function App() {
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [form, setForm] = useState({
+		expectedRevision: undefined as number | undefined,
+		operationId: crypto.randomUUID(),
 		name: "",
 		directory: "",
 		instructions: "",
@@ -244,6 +246,8 @@ function App() {
 	const [subject, setSubject] = useState<{
 		projectId: string;
 		sessionId: string;
+		expectedRevision?: number;
+		operationId?: string;
 	}>();
 	const [history, setHistory] = useState(false);
 	const [runId, setRunId] = useState("");
@@ -281,6 +285,10 @@ function App() {
 			return await fn();
 		} catch (e) {
 			setError(String(e));
+			void window.orbit
+				.call("snapshot")
+				.then(setState)
+				.catch(() => {});
 		}
 	}
 	function openSession(p: string, s: string) {
@@ -301,7 +309,13 @@ function App() {
 	}
 	function newProject() {
 		setEditing("");
-		setForm({ name: "", directory: "", instructions: "" });
+		setForm({
+			name: "",
+			directory: "",
+			instructions: "",
+			expectedRevision: undefined,
+			operationId: crypto.randomUUID(),
+		});
 		setView("project");
 	}
 	async function newChat(id = project?.unassigned ? "" : project?.id) {
@@ -544,7 +558,7 @@ function App() {
 						[
 							"Worker image",
 							state.health?.image,
-							"orbit-app-worker:0.1.0 · Orbit 0.8.1. Image readiness does not mean a worker is currently running.",
+							"orbit-app-worker:core-0.9.2 · Orbit 0.9.2. Image readiness does not mean a worker is currently running.",
 						],
 					].map(([label, ready, detail]) => (
 						<div className="card" key={String(label)}>
@@ -901,11 +915,16 @@ function App() {
 											command === "rename" ? "Rename" : "Move to project"
 										}
 										role="menuitem"
-										disabled={command === "move" && !!locked}
+										disabled={!!locked}
 										onClick={() => {
 											setSubject({
 												projectId: menu.projectId,
 												sessionId: menu.sessionId ?? "",
+												expectedRevision: state.projects
+													.find((p) => p.id === menu.projectId)
+													?.sessions.find((s) => s.id === menu.sessionId)
+													?.nameRevision,
+												operationId: crypto.randomUUID(),
 											});
 											setRename(
 												state.projects
@@ -940,7 +959,14 @@ function App() {
 									role="menuitem"
 									aria-label="Rename"
 									onClick={() => {
-										setSubject({ projectId: menu.projectId, sessionId: "" });
+										setSubject({
+											projectId: menu.projectId,
+											sessionId: "",
+											expectedRevision: state.projects.find(
+												(p) => p.id === menu.projectId,
+											)?.nameRevision,
+											operationId: crypto.randomUUID(),
+										});
 										setRename(
 											state.projects.find((p) => p.id === menu.projectId)
 												?.name ?? "",
@@ -961,6 +987,8 @@ function App() {
 										if (p) {
 											setEditing(p.id);
 											setForm({
+												expectedRevision: p.nameRevision,
+												operationId: crypto.randomUUID(),
 												name: p.name,
 												directory: p.directory ?? "",
 												instructions: p.instructions ?? "",
@@ -998,7 +1026,7 @@ function App() {
 							void action(async () => {
 								if (isProject)
 									await window.orbit.call("rename-project", {
-										projectId: subject.projectId,
+										...subject,
 										name: rename,
 									});
 								else

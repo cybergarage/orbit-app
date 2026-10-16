@@ -50,11 +50,13 @@ The unsigned arm64 app still requires Docker, Ollama, and the locally built work
 
 - Home/new-chat, project creation and editing with optional directory/instructions, session rename/move, conversation model selection, runtime health, operation approvals, cancellation, saved history, and top-level artifact listing.
 - Scheduled definitions and a separate execution history with input, answer, operation/approval events and failure/interruption details.
-- Session moves preserve original Orbit storage and working directory. Changing a project directory affects new chats only; project guidance affects future tasks. Running or recovery-pending sessions cannot move. Existing state is backed up before the additive metadata migration.
+- Session moves preserve original Orbit storage and working directory. Changing a project directory affects new chats only; project guidance affects future tasks. Running or recovery-pending sessions cannot move. Project/Chat names use Orbit core 0.9.2 APIs. Legacy App registries are rejected without migration or data deletion.
 - Durable one-time, hourly, and every-24-hour schedules. **The app must be running.** After shutdown, at most one missed occurrence is considered; interrupted work is not automatically replayed. There is no background daemon.
 - Intended for trusted local workspaces. Workers have no network access and receive only their project's workspace/core mounts, without host credentials or the Docker socket. This is not a complete sandbox guarantee: approved Bash can modify the project's core records.
 - Per-file limits and a storage watchdog are **not a hard disk quota**; rapid writes can still consume host disk space.
 - Orbit's pinned `braces@3.0.3` dependency has an unpatched DoS advisory. Restricted search syntax mitigates the direct glob/grep path, but an approved Bash script can still invoke the vulnerable dependency.
+
+See [core-backed names and storage requirements](docs/core-display-names.md) for the 0.9.2 transition and existing-data policy.
 
 See [approved UI implementation and current validation](docs/approved-ui-implementation.md) for the latest local implementation status.
 

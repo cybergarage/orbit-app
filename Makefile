@@ -33,7 +33,8 @@ clean:
 	fi; \
 	osascript \
 		-e 'on run argv' \
-		-e 'tell application "Finder" to delete (POSIX file (item 1 of argv))' \
+		-e 'set targetFile to (POSIX file (item 1 of argv)) as alias' \
+		-e 'tell application "Finder" to delete targetFile' \
 		-e 'end run' \
 		"$$state"; \
 	echo 'state.json をゴミ箱へ移動しました。'

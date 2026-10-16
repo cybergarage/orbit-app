@@ -1,3 +1,5 @@
+import { AutoTitles, generateTitle } from "./auto-titles";
+import { resolveSchedule, nextOccurrence } from "./scheduling";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { Store, text, identifier } from "./store";
@@ -36,8 +38,10 @@ function displayedStatus(run: RunControl, settled = false) {
 }
 export class Supervisor {
 	readonly store: Store;
+	readonly titles: AutoTitles;
 	worker?: Worker;
 	private admitted = false;
+	private ticking = false;
 	private currentRun?: RunControl;
 	private admittingSessionId?: string;
 	private epoch = 0;
@@ -55,8 +59,19 @@ export class Supervisor {
 			config: any,
 			event: (e: any) => void,
 		) => new Worker(workspace, core, config, event),
+		titleGenerator = generateTitle,
 	) {
 		this.store = new Store(root);
+		this.titles = new AutoTitles(
+			this.store,
+			() =>
+				!this.admitted &&
+				!this.closed &&
+				!this.recoveryBlocked &&
+				!this.store.state.active,
+			() => this.publish(),
+			titleGenerator,
+		);
 	}
 	async init() {
 		await this.store.init();
@@ -200,6 +215,12 @@ export class Supervisor {
 		};
 		this.currentRun = run;
 		try {
+			await this.titles.interrupt();
+			if (epoch !== this.epoch || this.closed)
+				throw Error("Submission cancelled");
+			await this.titles.provision(p.projectId, session, prompt, model);
+			if (epoch !== this.epoch || this.closed)
+				throw Error("Submission cancelled");
 			const health = await this.health();
 			if (epoch !== this.epoch || this.closed)
 				throw new Error("Submission cancelled");
@@ -297,6 +318,7 @@ export class Supervisor {
 					this.admitted = false;
 					this.admittingSessionId = undefined;
 					if (this.currentRun === run) this.currentRun = undefined;
+					this.titles.kick();
 				});
 			return { accepted: true };
 		} catch (e) {
@@ -459,6 +481,8 @@ export class Supervisor {
 			}
 			case "rename-session": {
 				this.requireRenameRevision(p);
+				this.store.assertMovable(p.projectId, p.sessionId);
+				await this.titles.interrupt(p.sessionId);
 				const result = await this.store.renameSession(p);
 				await this.publish();
 				return result;
@@ -515,27 +539,81 @@ export class Supervisor {
 				);
 				return entries.filter((e) => e.isFile()).map((e) => e.name);
 			}
+			case "appearance": {
+				if (!["system", "light", "dark"].includes(p.value))
+					throw Error("Invalid appearance");
+				this.store.state.appearance = p.value;
+				await this.publish();
+				return;
+			}
+			case "update-schedule":
 			case "schedule": {
 				this.store.session(p.projectId, p.sessionId);
-				const at = Number(p.nextAt),
-					interval = Number(p.intervalMs);
+				const existing =
+					commandName === "update-schedule"
+						? this.store.state.schedules.find((s) => s.id === identifier(p.id))
+						: undefined;
+				if (commandName === "update-schedule" && !existing)
+					throw Error("Schedule not found");
 				if (
-					!Number.isFinite(at) ||
-					at <= Date.now() ||
-					![0, 3600000, 86400000].includes(interval)
+					existing &&
+					(existing.projectId !== p.projectId ||
+						existing.sessionId !== p.sessionId)
 				)
-					throw new Error("Invalid schedule");
+					throw Error("Schedule moved; refresh before editing.");
+				const creationInput = JSON.stringify([
+					p.projectId,
+					p.sessionId,
+					text(p.prompt),
+					text(p.model, 120),
+					p.timing ?? [p.nextAt, p.intervalMs],
+				]);
+				if (!existing && p.operationId) {
+					identifier(p.operationId);
+					const prior = this.store.state.schedules.find(
+						(s) => s.creationId === p.operationId,
+					);
+					if (prior) {
+						if (prior.creationInput !== creationInput)
+							throw Error("Schedule creation input changed; start a new task.");
+						await this.publish();
+						return prior;
+					}
+				}
+				let plan = existing?.plan;
+				let at = existing?.nextAt;
+				let interval = existing?.intervalMs ?? 0;
+				if (p.timing) {
+					plan = resolveSchedule(p.timing, Date.now());
+					at = plan.firstAt;
+					interval =
+						plan.repeat.kind === "interval" ? plan.repeat.minutes * 60000 : 0;
+				} else if (!existing) {
+					at = Number(p.nextAt);
+					interval = Number(p.intervalMs);
+					if (
+						!Number.isFinite(at) ||
+						at <= Date.now() ||
+						![0, 3600000, 86400000].includes(interval)
+					)
+						throw Error("Invalid schedule");
+				}
+
 				const s = {
-					id: randomUUID(),
+					id: existing?.id ?? randomUUID(),
+					creationId: existing?.creationId ?? p.operationId,
+					creationInput: existing?.creationInput ?? creationInput,
+					plan,
 					projectId: p.projectId,
 					sessionId: p.sessionId,
 					prompt: text(p.prompt),
 					model: text(p.model, 120),
-					nextAt: at,
+					nextAt: Number(at),
 					intervalMs: interval,
 					enabled: true,
 				};
-				this.store.state.schedules.push(s);
+				if (existing) Object.assign(existing, s);
+				else this.store.state.schedules.push(s);
 				await this.publish();
 				return s;
 			}
@@ -553,66 +631,80 @@ export class Supervisor {
 		}
 	}
 	async tick(now = Date.now()) {
-		if (
-			this.admitted ||
-			this.closed ||
-			this.recoveryBlocked ||
-			this.store.state.active
-		)
-			return;
-		const s = this.store.state.schedules.find(
-			(s) => s.enabled && s.nextAt <= now,
-		);
-		if (!s) return;
-		const execution = {
-			id: randomUUID(),
-			scheduleId: s.id,
-			projectId: s.projectId,
-			sessionId: s.sessionId,
-			projectName: this.store.project(s.projectId).name,
-			requestId: randomUUID(),
-			dueAt: s.nextAt,
-			startedAt: now,
-			prompt: s.prompt,
-			model: s.model,
-			status: "starting",
-			events: [] as any[],
-		};
-		this.store.state.executions ??= [];
-		this.store.state.executions.push(execution);
-		s.enabled = s.intervalMs > 0;
-		s.nextAt = now + s.intervalMs;
-		await this.publish();
+		if (this.ticking) return;
+		this.ticking = true;
 		try {
-			await this.submit({ ...s, requestId: execution.requestId });
-		} catch (e) {
-			const session = this.store.session(s.projectId, s.sessionId);
-			const cancelled =
-				execution.events.some(
-					(event) =>
-						event.type === "cancel-requested" &&
-						event.requestId === execution.requestId &&
-						event.data.effective,
-				) && session.status === "cancelled";
-			execution.status = cancelled ? "cancelled" : "failed";
-			Object.assign(execution, { endedAt: Date.now() });
-			execution.events.push({
+			if (
+				this.admitted ||
+				this.closed ||
+				this.recoveryBlocked ||
+				this.store.state.active
+			)
+				return;
+			const s = this.store.state.schedules.find(
+				(s) => s.enabled && s.nextAt <= now,
+			);
+			if (!s) return;
+			const execution = {
 				id: randomUUID(),
-				type: "error",
-				at: new Date().toISOString(),
-				data: String(e),
-			});
-			session.events.push({
-				id: randomUUID(),
-				type: "schedule-error",
-				at: new Date().toISOString(),
-				data: String(e),
-			});
+				scheduleId: s.id,
+				projectId: s.projectId,
+				sessionId: s.sessionId,
+				projectName: this.store.project(s.projectId).name,
+				requestId: randomUUID(),
+				dueAt: s.nextAt,
+				startedAt: now,
+				prompt: s.prompt,
+				model: s.model,
+				status: "starting",
+				events: [] as any[],
+			};
+			this.store.state.executions ??= [];
+			this.store.state.executions.push(execution);
+			const next = s.plan
+				? nextOccurrence(s.plan, now)
+				: s.intervalMs > 0
+					? s.nextAt +
+						(Math.floor((now - s.nextAt) / s.intervalMs) + 1) * s.intervalMs
+					: undefined;
+			s.enabled = next !== undefined;
+			if (next !== undefined) s.nextAt = next;
 			await this.publish();
+			try {
+				await this.submit({ ...s, requestId: execution.requestId });
+			} catch (e) {
+				const session = this.store.session(s.projectId, s.sessionId);
+				const cancelled =
+					execution.events.some(
+						(event) =>
+							event.type === "cancel-requested" &&
+							event.requestId === execution.requestId &&
+							event.data.effective,
+					) && session.status === "cancelled";
+				execution.status = cancelled ? "cancelled" : "failed";
+				Object.assign(execution, { endedAt: Date.now() });
+				execution.events.push({
+					id: randomUUID(),
+					type: "error",
+					at: new Date().toISOString(),
+					data: String(e),
+				});
+				session.events.push({
+					id: randomUUID(),
+					type: "schedule-error",
+					at: new Date().toISOString(),
+					data: String(e),
+				});
+				await this.publish();
+			}
+		} finally {
+			this.ticking = false;
 		}
 	}
+
 	async close() {
 		this.closed = true;
+		await this.titles.close();
 		await this.cancel();
 		await Promise.allSettled(this.operations);
 		await this.saveQueue;

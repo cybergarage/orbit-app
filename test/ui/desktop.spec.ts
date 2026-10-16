@@ -97,8 +97,11 @@ test("project create/edit cancel, session rename/move, outside/ESC dismissal and
 		await page
 			.getByRole("button", { name: "Create project", exact: true })
 			.click();
+		await expect(
+			page.getByText(`Start a conversation in ${name}.`, { exact: true }),
+		).toBeVisible({ timeout: 30000 });
 	}
-	await page.getByRole("button", { name: "⌄ A", exact: true }).click();
+	await page.getByRole("button", { name: "Project A", exact: true }).click();
 	// Create idle session through the same renderer IPC used by New chat submit.
 	const initial = await page.evaluate(async () => {
 		const state = await window.orbit.call("snapshot");
@@ -207,7 +210,7 @@ test("project create/edit cancel, session rename/move, outside/ESC dismissal and
 		page.getByRole("heading", { name: "Renamed", exact: true }),
 	).toBeVisible();
 	await expect(
-		page.getByRole("button", { name: "⌄ Edited B", exact: true }),
+		page.getByRole("button", { name: "Project Edited B", exact: true }),
 	).toBeVisible();
 	expect(await page.evaluate(() => typeof (window as any).require)).toBe(
 		"undefined",
@@ -489,11 +492,38 @@ test("approved conversation, Debug overlay, project rename and real failed Retry
 		.getByRole("button", { name: "Completed conversation", exact: true })
 		.click();
 	await expect(page.locator(".chat-status")).toContainText("completed");
+	await expect
+		.poll(() =>
+			page
+				.getByRole("button", { name: "Debug", exact: true })
+				.locator("img")
+				.evaluate(
+					(image: HTMLImageElement) => image.complete && image.naturalWidth > 0,
+				),
+		)
+		.toBe(true);
+	const debugButtonBounds = await page
+		.getByRole("button", { name: "Debug", exact: true })
+		.boundingBox();
+	if (!debugButtonBounds) throw Error("Debug button is not rendered");
+	expect(debugButtonBounds.x + debugButtonBounds.width).toBeLessThanOrEqual(
+		1440,
+	);
 	await page.screenshot({ path: "test-results/approved-normal.png" });
 	await page.getByRole("button", { name: "Debug", exact: true }).click();
 	await expect(
 		page.getByRole("button", { name: "Close Debug", exact: true }),
 	).toBeVisible();
+	await expect
+		.poll(() =>
+			page
+				.getByRole("button", { name: "Close Debug", exact: true })
+				.locator("img")
+				.evaluate(
+					(image: HTMLImageElement) => image.complete && image.naturalWidth > 0,
+				),
+		)
+		.toBe(true);
 	const debugGeometry = await page.locator(".debug-pane").evaluate((pane) => {
 		const button = pane.querySelector(".debug-heading button");
 		const img = button?.querySelector("img");
@@ -587,7 +617,7 @@ test("approved conversation, Debug overlay, project rename and real failed Retry
 	await page.getByRole("button", { name: "Save name", exact: true }).click();
 	await expect(
 		page.getByRole("button", {
-			name: "⌄ A name chosen by the user",
+			name: "Project A name chosen by the user",
 			exact: true,
 		}),
 	).toBeVisible();
@@ -616,7 +646,7 @@ test("approved conversation, Debug overlay, project rename and real failed Retry
 	page = await app.firstWindow();
 	await expect(
 		page.getByRole("button", {
-			name: "⌄ A name chosen by the user",
+			name: "Project A name chosen by the user",
 			exact: true,
 		}),
 	).toBeVisible();

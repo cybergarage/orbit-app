@@ -6,8 +6,16 @@ export interface CoreNames {
 	call(core: string, request: Record<string, unknown>): Promise<any>;
 }
 export class ContainerCoreNames implements CoreNames {
+	private operations: Promise<unknown> = Promise.resolve();
 	constructor(private readonly root: string) {}
-	async call(core: string, request: Record<string, unknown>) {
+	call(core: string, request: Record<string, unknown>) {
+		const operation = this.operations.then(() =>
+			this.performCall(core, request),
+		);
+		this.operations = operation.catch(() => {});
+		return operation;
+	}
+	private async performCall(core: string, request: Record<string, unknown>) {
 		const catalog = path.join(this.root, "catalog");
 		if (request.command !== "create-project") {
 			await fs.access(path.join(catalog, "projects.sqlite"));

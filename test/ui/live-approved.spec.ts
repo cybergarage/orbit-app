@@ -3,6 +3,102 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { command, dockerPath } from "../../src/worker";
+test("live tool approval stays visible with Debug closed and runs only after approval", async () => {
+	test.skip(
+		process.env.ORBIT_APP_LIVE !== "1",
+		"Explicit local model verification only",
+	);
+	test.setTimeout(180000);
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-approval-live-"));
+	const app = await electron.launch({
+		args: ["."],
+		env: { ...process.env, ORBIT_APP_TEST: "1", ORBIT_APP_DATA: root },
+	});
+	const page = await app.firstWindow();
+	try {
+		const ids = await page.evaluate(async () => {
+			const p = await window.orbit.call("create-project", {
+				name: "Synthetic approval verification",
+			});
+			const s = await window.orbit.call("create-session", { projectId: p.id });
+			await window.orbit.call("select-model", {
+				projectId: p.id,
+				sessionId: s.id,
+				model: "gemma4:12b",
+			});
+			return { p: p.id, s: s.id };
+		});
+		await page.getByRole("button", { name: "Chat 1", exact: true }).click();
+		await page
+			.getByLabel("Task", { exact: true })
+			.fill(
+				"Use the bash tool exactly once to run node -e \"console.log('APPROVAL-7264')\" in /workspace. This harmless command only prints text. Do not use any other tools, read or write any files, or access any external service. Invoke the bash tool now, rather than asking for approval in a text response; Orbit App handles approval for the tool call. After the command succeeds, reply with only APPROVAL-7264.",
+			);
+		await page.getByRole("button", { name: /Run task/ }).click();
+		const approve = page.getByRole("button", { name: "Approve", exact: true });
+		await expect(approve).toBeVisible({ timeout: 90000 });
+		await expect(
+			page.getByRole("region", { name: "Debug details" }),
+		).toHaveCount(0);
+		await expect(
+			page.getByRole("button", { name: "Deny", exact: true }),
+		).toBeVisible();
+		const before = await page.evaluate(() => window.orbit.call("snapshot"));
+		const pending = before.projects.find((p: any) => p.id === ids.p)
+			.sessions[0];
+		const request = pending.events.findLast(
+			(e: any) => e.type === "approval",
+		).data;
+		expect(request.preview.name).toBe("bash");
+		expect(request.preview.command).toBe(
+			"node -e \"console.log('APPROVAL-7264')\"",
+		);
+		expect(pending.status).toBe("awaiting-approval");
+		expect(pending.events.some((e: any) => e.type === "approval")).toBe(true);
+		expect(
+			pending.events.some(
+				(e: any) =>
+					e.type === "agent-event" && e.data.type === "tool-completed",
+			),
+		).toBe(false);
+		await page.screenshot({ path: "test-results/live-approval.png" });
+		await approve.click();
+		await expect(
+			page.getByRole("button", { name: /(?:Run|Retry) task/ }),
+		).toBeVisible({ timeout: 90000 });
+		const after = await page.evaluate(() => window.orbit.call("snapshot"));
+		const completed = after.projects.find((p: any) => p.id === ids.p)
+			.sessions[0];
+		expect(completed.status).toBe("completed");
+		expect(completed.answer).toContain("APPROVAL-7264");
+		expect(
+			completed.events.some(
+				(e: any) =>
+					e.type === "agent-event" &&
+					e.data.type === "tool-completed" &&
+					e.data.toolCall.name === "bash",
+			),
+		).toBe(true);
+		await fs.writeFile(
+			"test-results/approval-live.json",
+			JSON.stringify(
+				{
+					status: "passed",
+					model: "gemma4:12b",
+					debugClosed: true,
+					approvalRequired: true,
+					noToolBeforeApproval: true,
+					answer: completed.answer,
+				},
+				null,
+				2,
+			),
+		);
+	} finally {
+		await app.close().catch(() => {});
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});
 test("live existing-image runtime, inference, actual worker cancel/retry and moved Orbit history resume", async () => {
 	test.skip(
 		process.env.ORBIT_APP_LIVE !== "1",
@@ -31,6 +127,7 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 		summary.health = await page.evaluate(
 			async () => (await window.orbit.call("snapshot")).health,
 		);
+		await page.getByRole("button", { name: "Home", exact: true }).click();
 		for (const name of ["Live source", "Live destination"]) {
 			await page
 				.getByRole("button", { name: "+ New project", exact: true })
@@ -39,9 +136,12 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 			await page
 				.getByRole("button", { name: "Create project", exact: true })
 				.click();
+			await expect(
+				page.getByText(`Start a conversation in ${name}.`, { exact: true }),
+			).toBeVisible({ timeout: 30000 });
 		}
 		await page
-			.getByRole("button", { name: "⌄ Live source", exact: true })
+			.getByRole("button", { name: "Project Live source", exact: true })
 			.click();
 		await page.getByLabel("Model", { exact: true }).selectOption("gemma4:12b");
 		const marker = "MAPLE-6382";
@@ -171,7 +271,10 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 			{ recursive: true },
 		);
 		await page
-			.getByRole("button", { name: "Chat menu Chat 1", exact: true })
+			.getByRole("button", {
+				name: `Chat menu ${retrySession.name}`,
+				exact: true,
+			})
 			.click();
 		await page
 			.getByRole("menuitem", { name: "Move to project", exact: true })
@@ -195,7 +298,9 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 		await app.close();
 		app = await launch();
 		page = await app.firstWindow();
-		await page.getByRole("button", { name: "Chat 1", exact: true }).click();
+		await page
+			.getByRole("button", { name: retrySession.name, exact: true })
+			.click();
 		await page
 			.getByLabel("Task", { exact: true })
 			.fill(
@@ -247,5 +352,93 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 			"test-results/live-approved.json",
 			JSON.stringify(summary, null, 2),
 		);
+	}
+});
+
+test("live first-input title generation uses idle local model and preserves conversation through restart", async () => {
+	test.skip(
+		process.env.ORBIT_APP_LIVE !== "1",
+		"Explicit local model verification only",
+	);
+	test.setTimeout(180000);
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-title-live-"));
+	const launch = () =>
+		electron.launch({
+			args: ["."],
+			env: { ...process.env, ORBIT_APP_TEST: "1", ORBIT_APP_DATA: root },
+		});
+	let app = await launch(),
+		page = await app.firstWindow();
+	try {
+		const ids = await page.evaluate(async () => {
+			const p = await window.orbit.call("create-project", {
+				name: "Synthetic title verification",
+			});
+			const s = await window.orbit.call("create-session", { projectId: p.id });
+			await window.orbit.call("select-model", {
+				projectId: p.id,
+				sessionId: s.id,
+				model: "gemma4:12b",
+			});
+			return { p: p.id, s: s.id };
+		});
+		await page.getByRole("button", { name: "Chat 1", exact: true }).click();
+		const prompt =
+			"This chat concerns a Kyoto weekend itinerary. Reply with only OK. Do not use any tools, commands, files or external services.";
+		await page.getByLabel("Task", { exact: true }).fill(prompt);
+		await page.getByRole("button", { name: /Run task/ }).click();
+		await expect(
+			page.locator(".chat-status").getByText("Generating title…"),
+		).toBeVisible({ timeout: 90000 });
+		await page.screenshot({ path: "test-results/title-generating.png" });
+		await expect
+			.poll(
+				async () => {
+					const state = await page.evaluate(() =>
+						window.orbit.call("snapshot"),
+					);
+					return state.projects.find((p: any) => p.id === ids.p).sessions[0]
+						.autoTitle.stage;
+				},
+				{ timeout: 25000 },
+			)
+			.toBe("done");
+		const state = await page.evaluate(() => window.orbit.call("snapshot")),
+			session = state.projects.find((p: any) => p.id === ids.p).sessions[0];
+		expect(session.name.length).toBeGreaterThan(0);
+		expect(session.name.length).toBeLessThanOrEqual(80);
+		expect(session.name).not.toBe(prompt.slice(0, 40));
+		expect(session.answer).toContain("OK");
+		expect(
+			session.events.filter((e: any) => e.type === "submission"),
+		).toHaveLength(1);
+		expect(
+			session.events.filter((e: any) => e.type === "approval"),
+		).toHaveLength(0);
+		await app.close();
+		app = await launch();
+		page = await app.firstWindow();
+		await page.getByRole("button", { name: session.name, exact: true }).click();
+		const restored = await page.evaluate(() => window.orbit.call("snapshot"));
+		expect(
+			restored.projects.find((p: any) => p.id === ids.p).sessions[0].name,
+		).toBe(session.name);
+		await fs.writeFile(
+			"test-results/title-live.json",
+			JSON.stringify(
+				{
+					status: "passed",
+					name: session.name,
+					answer: session.answer,
+					submissions: 1,
+					model: "gemma4:12b",
+				},
+				null,
+				2,
+			),
+		);
+	} finally {
+		await app.close().catch(() => {});
+		await fs.rm(root, { recursive: true, force: true });
 	}
 });

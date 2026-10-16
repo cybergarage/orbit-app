@@ -1,6 +1,8 @@
+import { ScheduleEditor } from "./schedule-editor";
+import { describeRepeat, scheduledTime } from "./scheduling";
 import { useState, useEffect, useRef, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import type { Snapshot, EventRecord } from "./types";
+import type { Snapshot, EventRecord, Schedule } from "./types";
 import "./ui.css";
 function NativeDialog({
 	children,
@@ -172,7 +174,7 @@ function App() {
 				<div className="card">
 					<h2>No scheduled tasks</h2>
 					<p>Create a task to run at a local date and time.</p>
-					<button type="button" onClick={() => setView("schedule")}>
+					<button type="button" onClick={() => openSchedule()}>
 						+ New task
 					</button>
 				</div>
@@ -184,13 +186,26 @@ function App() {
 				<p>
 					{state.projects.find((p) => p.id === s.projectId)?.name} · {s.model}
 				</p>
+				{s.plan && (
+					<p>
+						First: {scheduledTime(s.plan.firstAt, s.plan.timeZone)} ·{" "}
+						{s.plan.timeZone}
+					</p>
+				)}
 				<p>
 					{s.enabled
-						? `Next: ${new Date(s.nextAt).toLocaleString()}`
+						? `Next: ${s.plan ? `${scheduledTime(s.nextAt, s.plan.timeZone)} · ${s.plan.timeZone}` : new Date(s.nextAt).toLocaleString()}`
 						: "Disabled"}{" "}
 					·{" "}
-					{s.intervalMs ? `Every ${s.intervalMs / 3600000} hours` : "One time"}
+					{s.plan
+						? describeRepeat(s.plan.repeat)
+						: s.intervalMs
+							? `Every ${s.intervalMs / 3600000} hours`
+							: "One time"}
 				</p>
+				<button type="button" onClick={() => openSchedule(s)}>
+					Edit schedule
+				</button>
 				<button
 					type="button"
 					disabled={!s.enabled}
@@ -210,7 +225,7 @@ function App() {
 		if (view === "scheduled") {
 			return "Scheduled";
 		}
-		if (view === "settings") {
+		if (view === "settings" || view === "runtime") {
 			return "Settings";
 		}
 		return "Home";
@@ -251,8 +266,30 @@ function App() {
 	}>();
 	const [history, setHistory] = useState(false);
 	const [runId, setRunId] = useState("");
-	const [when, setWhen] = useState("");
-	const [repeat, setRepeat] = useState("0");
+	const [editingSchedule, setEditingSchedule] = useState<Schedule>();
+	const [scheduleGeneration, setScheduleGeneration] = useState(0);
+	const [settingsCategory, setSettingsCategory] = useState("appearance");
+	const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+	const [systemDark, setSystemDark] = useState(
+		matchMedia("(prefers-color-scheme: dark)").matches,
+	);
+	const dark =
+		state.appearance === "dark" || (state.appearance !== "light" && systemDark);
+	useEffect(() => {
+		document.documentElement.dataset.appearance = state.appearance ?? "system";
+	}, [state.appearance]);
+	useEffect(() => {
+		const query = matchMedia("(prefers-color-scheme: dark)");
+		const update = () => setSystemDark(query.matches);
+		query.addEventListener("change", update);
+		return () => query.removeEventListener("change", update);
+	}, []);
+	function openSchedule(schedule?: Schedule) {
+		setEditingSchedule(schedule);
+		setScheduleGeneration((value) => value + 1);
+		setError("");
+		setView("schedule");
+	}
 	const [artifacts, setArtifacts] = useState<string[]>([]);
 	useEffect(() => {
 		void window.orbit.call("snapshot").then(setState);
@@ -324,6 +361,11 @@ function App() {
 				projectId: id,
 			});
 			openSession(s.projectId, s.id);
+			setCollapsed((current) => {
+				const next = new Set(current);
+				next.delete(s.projectId);
+				return next;
+			});
 		});
 	}
 	const lastSubmission = session?.events.findLast(
@@ -525,9 +567,10 @@ function App() {
 	}
 	function renderRuntime() {
 		return (
-			(view === "runtime" || view === "settings") && (
-				<section className="page">
-					<h1>{view === "runtime" ? "Runtime connections" : "Settings"}</h1>
+			(view === "runtime" ||
+				(view === "settings" && settingsCategory === "status")) && (
+				<section className="page status-page">
+					<h1>Status</h1>
 					<p>
 						Local execution environment. Model selection is saved for each
 						conversation.
@@ -543,6 +586,18 @@ function App() {
 								? `Last checked ${new Date(state.health.checkedAt).toLocaleString()}`
 								: "Recheck to inspect this Mac."}
 						</p>
+					</div>
+					<div className="card">
+						<small>Local model</small>
+						<p>
+							{state.health?.models.length
+								? state.health.models.join(", ")
+								: "No installed models reported"}
+						</p>
+						<small>
+							Installed models only. Orbit does not download models
+							automatically.
+						</small>
 					</div>
 					{[
 						[
@@ -633,6 +688,9 @@ function App() {
 									<div className="chat-status">
 										<strong>{session.name}</strong>
 										<small>{session.status}</small>
+										{session.autoTitle?.stage === "generating" && (
+											<small role="status">Generating title…</small>
+										)}
 									</div>
 									<div className="timeline">
 										<Events events={session.events} />
@@ -714,7 +772,7 @@ function App() {
 										>
 											Refresh files
 										</button>
-										<button type="button" onClick={() => setView("schedule")}>
+										<button type="button" onClick={() => openSchedule()}>
 											Schedule this task
 										</button>
 										<small>
@@ -750,98 +808,47 @@ function App() {
 	function renderScheduleEditor() {
 		return (
 			view === "schedule" && (
-				<section className="page project-form">
-					<h1>New scheduled task</h1>
-					<p>
-						Runs only while Orbit App is open. On restart, missed occurrences
-						coalesce into one execution. Operations still require approval.
-					</p>
-					<form
-						onSubmit={(e) => {
-							e.preventDefault();
-							void action(async () => {
-								let p = projectId,
-									s = sessionId;
-								if (!session) {
-									const created = await window.orbit.call("create-session", {
-										projectId: p,
-									});
-									p = created.projectId;
-									s = created.id;
-									setProject(p);
-									setSession(s);
-								}
-								await window.orbit.call("schedule", {
-									projectId: p,
-									sessionId: s,
-									prompt,
-									model: selectedModel,
-									nextAt: new Date(when).getTime(),
-									intervalMs: Number(repeat),
-								});
-								setHistory(false);
-								setView("scheduled");
+				<ScheduleEditor
+					key={`${editingSchedule?.id ?? "new"}-${scheduleGeneration}`}
+					existing={editingSchedule}
+					prompt={prompt}
+					model={selectedModel}
+					models={Array.from(
+						new Set([
+							...(state.health?.models ?? []),
+							...(selectedModel ? [selectedModel] : []),
+						]),
+					)}
+					onCancel={() => setView("scheduled")}
+					onSave={async (value) => {
+						let p = editingSchedule?.projectId ?? projectId,
+							id = editingSchedule?.sessionId ?? sessionId;
+						if (!id) {
+							const created = await window.orbit.call("create-session", {
+								projectId: p,
 							});
-						}}
-					>
-						<label htmlFor="scheduled-task">Task input</label>
-						<textarea
-							id="scheduled-task"
-							value={prompt}
-							required
-							maxLength={12000}
-							onChange={(e) => setPrompt(e.target.value)}
-						/>
-						<label>
-							Model{" "}
-							<select
-								aria-label="Schedule model"
-								value={selectedModel}
-								onChange={(e) => setModel(e.target.value)}
-							>
-								<option value="">Select an installed model</option>
-								{state.health?.models.map((m) => (
-									<option key={m}>{m}</option>
-								))}
-							</select>
-						</label>
-						<label htmlFor="when">Local date and time</label>
-						<input
-							id="when"
-							type="datetime-local"
-							value={when}
-							required
-							onChange={(e) => setWhen(e.target.value)}
-						/>
-						<label>
-							Recurrence{" "}
-							<select
-								aria-label="Schedule recurrence"
-								value={repeat}
-								onChange={(e) => setRepeat(e.target.value)}
-							>
-								<option value="0">One time</option>
-								<option value="3600000">Every hour</option>
-								<option value="86400000">Every 24 hours</option>
-							</select>
-						</label>
-						<div className="actions">
-							<button
-								type="submit"
-								className="primary"
-								disabled={!prompt.trim() || !selectedModel || !when}
-							>
-								Schedule task
-							</button>
-							<button type="button" onClick={() => setView("home")}>
-								Cancel
-							</button>
-						</div>
-					</form>
-				</section>
+							p = created.projectId;
+							id = created.id;
+							setProject(p);
+							setSession(id);
+						}
+						await window.orbit.call(
+							editingSchedule ? "update-schedule" : "schedule",
+							{
+								...value,
+								id: editingSchedule?.id,
+								projectId: p,
+								sessionId: id,
+							},
+						);
+						setHistory(false);
+						setView("scheduled");
+					}}
+				/>
 			)
 		);
 	}
+
 	function renderScheduled() {
 		return (
 			view === "scheduled" && (
@@ -874,7 +881,7 @@ function App() {
 						<strong>Runs while Orbit App is open</strong>
 						<p>
 							Closing the app stops active work. No background OS service is
-							installed. All times are local.
+							installed. Times use each schedule's saved time zone.
 						</p>
 					</div>
 					{renderScheduledContent()}
@@ -1136,25 +1143,64 @@ function App() {
 						className={view === v.toLowerCase() ? "selected" : ""}
 						onClick={() => {
 							setView(v.toLowerCase());
+							if (v === "Settings") setSettingsCategory("appearance");
 							if (v === "Home") {
 								setProject("");
 								setSession("");
 							}
 						}}
 					>
-						<img src={`assets/${v.toLowerCase()}.svg`} alt="" />
+						<img
+							src={`assets/${v.toLowerCase()}${dark ? "-dark" : ""}.svg`}
+							alt=""
+						/>
 						{v}
 					</button>
 				))}
 			</nav>
-			<aside>
+			<aside
+				className={
+					view === "settings" || view === "runtime"
+						? "settings-sidebar"
+						: "home-sidebar"
+				}
+			>
 				<h2>{sidebarHeading()}</h2>
-				{view === "scheduled" ? (
+				{view === "settings" || view === "runtime" ? (
+					<>
+						<button
+							className={
+								settingsCategory === "appearance" && view !== "runtime"
+									? "selected"
+									: ""
+							}
+							onClick={() => {
+								setView("settings");
+								setSettingsCategory("appearance");
+							}}
+						>
+							Appearance
+						</button>
+						<button
+							className={
+								settingsCategory === "status" || view === "runtime"
+									? "selected"
+									: ""
+							}
+							onClick={() => {
+								setView("settings");
+								setSettingsCategory("status");
+							}}
+						>
+							Status
+						</button>
+					</>
+				) : view === "scheduled" || view === "schedule" ? (
 					<>
 						<button
 							type="button"
 							onClick={() => {
-								setView("schedule");
+								openSchedule();
 								setPrompt("");
 							}}
 						>
@@ -1201,18 +1247,36 @@ function App() {
 						{state.projects
 							.filter((p) => !p.unassigned)
 							.map((p) => (
-								<div key={p.id}>
+								<div key={p.id} className="project-group">
 									<div className="row">
 										<button
 											type="button"
-											className={projectId === p.id ? "selected" : ""}
+											aria-expanded={!collapsed.has(p.id)}
+											aria-label={`Project ${p.name}`}
+											className={
+												projectId === p.id
+													? "selected project-toggle"
+													: "project-toggle"
+											}
 											onClick={() => {
+												setCollapsed((current) => {
+													const next = new Set(current);
+													if (projectId === p.id && !next.has(p.id))
+														next.add(p.id);
+													else next.delete(p.id);
+													return next;
+												});
 												setProject(p.id);
 												setSession("");
 												setView("home");
 											}}
 										>
-											⌄ {p.name}
+											<img
+												className="folder-icon"
+												src={`assets/folder-${collapsed.has(p.id) ? "closed" : "open"}.svg`}
+												alt=""
+											/>
+											<span className="project-label">{p.name}</span>
 										</button>
 										<button
 											type="button"
@@ -1230,25 +1294,29 @@ function App() {
 											<img src="assets/more.svg" alt="" />
 										</button>
 									</div>
-									{p.sessions.map((s) => (
-										<div className="row session-row" key={s.id}>
-											<button
-												type="button"
-												className={sessionId === s.id ? "selected" : ""}
-												onContextMenu={(e) => showMenu(e, p.id, s.id)}
-												onClick={() => openSession(p.id, s.id)}
-											>
-												{s.name}
-											</button>
-											<button
-												type="button"
-												aria-label={`Chat menu ${s.name}`}
-												onClick={(e) => showMenu(e, p.id, s.id)}
-											>
-												<img src="assets/more.svg" alt="" />
-											</button>
-										</div>
-									))}
+									{!collapsed.has(p.id) &&
+										p.sessions.map((s) => (
+											<div className="row session-row" key={s.id}>
+												<button
+													type="button"
+													className={sessionId === s.id ? "selected" : ""}
+													onContextMenu={(e) => showMenu(e, p.id, s.id)}
+													onClick={() => openSession(p.id, s.id)}
+												>
+													{s.name}
+													{s.autoTitle?.stage === "generating" && (
+														<small role="status">Generating title…</small>
+													)}
+												</button>
+												<button
+													type="button"
+													aria-label={`Chat menu ${s.name}`}
+													onClick={(e) => showMenu(e, p.id, s.id)}
+												>
+													<img src="assets/more.svg" alt="" />
+												</button>
+											</div>
+										))}
 								</div>
 							))}
 						<small className="section-label">CHATS</small>
@@ -1264,6 +1332,9 @@ function App() {
 											onClick={() => openSession(p.id, s.id)}
 										>
 											{s.name}
+											{s.autoTitle?.stage === "generating" && (
+												<small role="status">Generating title…</small>
+											)}
 										</button>
 										<button
 											type="button"
@@ -1280,11 +1351,21 @@ function App() {
 				)}
 				<div className="sidebar-bottom">
 					<small>On this Mac</small>
-					<button type="button" onClick={() => setView("runtime")}>
-						● Runtime ·{" "}
-						{checks === undefined ? "Not checked" : `${checks}/3 checks passed`}{" "}
-						›
-					</button>
+					{!["settings", "runtime"].includes(view) && (
+						<button
+							type="button"
+							onClick={() => {
+								setView("settings");
+								setSettingsCategory("status");
+							}}
+						>
+							● Runtime ·{" "}
+							{checks === undefined
+								? "Not checked"
+								: `${checks}/3 checks passed`}{" "}
+							›
+						</button>
+					)}
 				</div>
 			</aside>
 			<main>
@@ -1294,6 +1375,66 @@ function App() {
 					</div>
 				)}
 				{!dialog && renderProjectEditor()}
+				{!dialog &&
+					view === "settings" &&
+					settingsCategory === "appearance" && (
+						<section className="page appearance-page">
+							<h1>Appearance</h1>
+							<p>Make Orbit feel at home.</p>
+							<div className="card">
+								<strong>Theme</strong>
+								<p>Choose how Orbit appears on this device.</p>
+								<fieldset className="theme-options" aria-label="Theme">
+									{(["system", "light", "dark"] as const).map((value) => (
+										<button
+											key={value}
+											aria-pressed={(state.appearance ?? "system") === value}
+											className={`theme-option ${(state.appearance ?? "system") === value ? "selected" : ""}`}
+											onClick={() =>
+												void action(() =>
+													window.orbit.call("appearance", { value }),
+												)
+											}
+										>
+											<span
+												className={`theme-preview ${value === "dark" ? "preview-dark" : "preview-light"}`}
+											>
+												<i />
+												<i />
+												<span>
+													<b />
+													<em />
+													<i />
+												</span>
+											</span>
+											<strong>{value[0].toUpperCase() + value.slice(1)}</strong>
+											<small>
+												{value === "system"
+													? "Follow your device"
+													: value === "light"
+														? "Warm and bright"
+														: "Soft, low-light colors"}
+											</small>
+										</button>
+									))}
+								</fieldset>
+							</div>
+							<div className="card">
+								<strong>
+									{state.appearance === "dark"
+										? "A calmer dark workspace"
+										: state.appearance === "light"
+											? "A lighter workspace"
+											: "In sync with your system"}
+								</strong>
+								<p>
+									{state.appearance === "system" || !state.appearance
+										? "System follows your device’s light or dark appearance automatically."
+										: "Your preference stays selected when you reopen Orbit App. Switch to System to follow your device automatically."}
+								</p>
+							</div>
+						</section>
+					)}
 				{!dialog && renderRuntime()}
 				{!dialog && renderConversation()}
 				{!dialog && renderScheduleEditor()}

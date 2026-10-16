@@ -37,6 +37,18 @@ export class Store {
 			);
 		await this.refreshNames();
 		this.state.namesVersion = 1;
+		this.state.appearance ??= "system";
+		for (const project of this.state.projects)
+			for (const session of project.sessions) {
+				if (
+					session.autoTitle &&
+					["pending", "generating"].includes(session.autoTitle.stage)
+				) {
+					session.autoTitle.stage = "failed";
+					delete session.autoTitle.prompt;
+					delete session.autoTitle.model;
+				}
+			}
 		this.state.executions ??= [];
 		this.restoreRuntimeState();
 
@@ -193,6 +205,7 @@ export class Store {
 		const s: DesktopSession = {
 			id: randomUUID(),
 			name: `Chat ${p.sessions.length + 1}`,
+			autoTitle: { stage: "new", generation: 0 },
 			events: [],
 			status: "idle",
 			storageProjectId: p.id,
@@ -352,6 +365,11 @@ export class Store {
 	}
 	async renameSession(p: any) {
 		const session = this.assertMovable(p.projectId, p.sessionId);
+		if (!p.automatic && session.autoTitle) {
+			session.autoTitle.stage = "manual";
+			session.autoTitle.generation++;
+			await this.save();
+		}
 		const named = await this.names.call(
 			this.location(p.projectId, p.sessionId).core,
 			{

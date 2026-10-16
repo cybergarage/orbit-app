@@ -217,10 +217,10 @@ export class Supervisor {
 		try {
 			await this.titles.interrupt();
 			if (epoch !== this.epoch || this.closed)
-				throw Error("Submission cancelled");
+				throw new Error("Submission cancelled");
 			await this.titles.provision(p.projectId, session, prompt, model);
 			if (epoch !== this.epoch || this.closed)
-				throw Error("Submission cancelled");
+				throw new Error("Submission cancelled");
 			const health = await this.health();
 			if (epoch !== this.epoch || this.closed)
 				throw new Error("Submission cancelled");
@@ -541,7 +541,7 @@ export class Supervisor {
 			}
 			case "appearance": {
 				if (!["system", "light", "dark"].includes(p.value))
-					throw Error("Invalid appearance");
+					throw new Error("Invalid appearance");
 				this.store.state.appearance = p.value;
 				await this.publish();
 				return;
@@ -554,13 +554,13 @@ export class Supervisor {
 						? this.store.state.schedules.find((s) => s.id === identifier(p.id))
 						: undefined;
 				if (commandName === "update-schedule" && !existing)
-					throw Error("Schedule not found");
+					throw new Error("Schedule not found");
 				if (
 					existing &&
 					(existing.projectId !== p.projectId ||
 						existing.sessionId !== p.sessionId)
 				)
-					throw Error("Schedule moved; refresh before editing.");
+					throw new Error("Schedule moved; refresh before editing.");
 				const creationInput = JSON.stringify([
 					p.projectId,
 					p.sessionId,
@@ -575,7 +575,9 @@ export class Supervisor {
 					);
 					if (prior) {
 						if (prior.creationInput !== creationInput)
-							throw Error("Schedule creation input changed; start a new task.");
+							throw new Error(
+								"Schedule creation input changed; start a new task.",
+							);
 						await this.publish();
 						return prior;
 					}
@@ -596,7 +598,7 @@ export class Supervisor {
 						at <= Date.now() ||
 						![0, 3600000, 86400000].includes(interval)
 					)
-						throw Error("Invalid schedule");
+						throw new Error("Invalid schedule");
 				}
 
 				const s = {

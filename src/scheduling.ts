@@ -27,15 +27,15 @@ export function resolveSchedule(
 	now: number,
 ): SchedulePlan {
 	if (!input?.first || !input.repeat)
-		throw Error("Choose a first run and repeat rule.");
+		throw new Error("Choose a first run and repeat rule.");
 	try {
 		if (typeof input.timeZone !== "string" || /^[+-]/.test(input.timeZone))
-			throw Error("A named time zone is required");
+			throw new Error("A named time zone is required");
 		Temporal.Instant.fromEpochMilliseconds(now).toZonedDateTimeISO(
 			input.timeZone,
 		);
 	} catch {
-		throw Error("Enter a valid IANA time zone, for example Asia/Tokyo.");
+		throw new Error("Enter a valid IANA time zone, for example Asia/Tokyo.");
 	}
 	const repeat = input.repeat;
 	if (
@@ -44,7 +44,7 @@ export function resolveSchedule(
 			repeat.minutes < 1 ||
 			repeat.minutes > 525600)
 	)
-		throw Error("Repeat interval must be between 1 and 525600 minutes.");
+		throw new Error("Repeat interval must be between 1 and 525600 minutes.");
 	if (
 		repeat.kind === "calendar" &&
 		(!["day", "week"].includes(repeat.unit) ||
@@ -52,13 +52,13 @@ export function resolveSchedule(
 			repeat.every < 1 ||
 			repeat.every > 365)
 	)
-		throw Error("Calendar repeat must be between 1 and 365 days or weeks.");
+		throw new Error("Calendar repeat must be between 1 and 365 days or weeks.");
 	if (!["none", "interval", "calendar"].includes(repeat.kind))
-		throw Error("Choose a supported repeat rule.");
+		throw new Error("Choose a supported repeat rule.");
 	let firstAt: number;
 	if (input.first.kind === "relative") {
 		if (![900000, 3600000].includes(input.first.delayMs))
-			throw Error("Choose 15 minutes or 1 hour after creation.");
+			throw new Error("Choose 15 minutes or 1 hour after creation.");
 		firstAt = now + input.first.delayMs;
 	} else if (input.first.kind === "absolute") {
 		try {
@@ -67,11 +67,11 @@ export function resolveSchedule(
 				{ disambiguation: "compatible" },
 			).epochMilliseconds;
 		} catch {
-			throw Error("Choose a valid first-run date and time.");
+			throw new Error("Choose a valid first-run date and time.");
 		}
-	} else throw Error("Choose a first run.");
+	} else throw new Error("Choose a first run.");
 	if (firstAt <= now)
-		throw Error(
+		throw new Error(
 			"That time has passed. Choose a future time or use 15 minutes from creation.",
 		);
 	return {

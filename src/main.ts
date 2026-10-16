@@ -30,9 +30,7 @@ async function start() {
 			},
 			undefined,
 			testMode && process.env.ORBIT_APP_LIVE !== "1"
-				? async () => {
-						throw Error("Title model disabled in UI fixtures");
-					}
+				? () => Promise.reject(new Error("Title model disabled in UI fixtures"))
 				: undefined,
 		);
 		await supervisor.init();
@@ -60,7 +58,7 @@ async function start() {
 				event.senderFrame !== window.webContents.mainFrame ||
 				fileURLToPath(event.senderFrame.url) !== entry
 			)
-				throw Error("Untrusted IPC sender");
+				throw new Error("Untrusted IPC sender");
 			return supervisor.dispatch(command, payload);
 		});
 		await window.loadFile(entry);

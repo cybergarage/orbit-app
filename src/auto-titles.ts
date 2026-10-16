@@ -29,16 +29,16 @@ export async function generateTitle(
 			options: { num_ctx: 4096, num_predict: 64, temperature: 0 },
 		}),
 	});
-	if (!response.ok) throw Error("Title model unavailable");
+	if (!response.ok) throw new Error("Title model unavailable");
 	const body = await response.json();
 	const title = body.message?.content?.trim();
 	if (
 		typeof title !== "string" ||
 		!title ||
 		title.length > 80 ||
-		Array.from(title).some((c) => c.charCodeAt(0) < 32)
+		Array.from(title).some((c) => (c.codePointAt(0) ?? 32) < 32)
 	)
-		throw Error("Invalid generated title");
+		throw new Error("Invalid generated title");
 	return title;
 }
 /** One low-priority call at a time; names themselves remain authoritative in core. */

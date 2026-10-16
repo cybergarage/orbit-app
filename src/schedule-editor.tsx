@@ -117,7 +117,7 @@ export function ScheduleEditor({
 	try {
 		const plan = changed ? resolveSchedule(timing(), now) : existing?.plan;
 		const at = changed ? plan?.firstAt : existing?.nextAt;
-		if (at === undefined) throw Error("Choose a first run.");
+		if (at === undefined) throw new Error("Choose a first run.");
 		const next = plan
 			? nextOccurrence(plan, at)
 			: existing?.intervalMs
@@ -172,7 +172,7 @@ export function ScheduleEditor({
 					onChange={(e) => setPrompt(e.target.value)}
 				/>
 				<label className="select-row">
-					Repeat
+					Repeat{" "}
 					<select
 						aria-label="Schedule recurrence"
 						value={repeat}
@@ -201,7 +201,7 @@ export function ScheduleEditor({
 				{repeat === "custom" && (
 					<div className="actions">
 						<label>
-							Every
+							Every{" "}
 							<input
 								aria-label="Repeat count"
 								type="number"
@@ -214,7 +214,7 @@ export function ScheduleEditor({
 							/>
 						</label>
 						<label>
-							Unit
+							Unit{" "}
 							<select
 								aria-label="Repeat unit"
 								value={unit}
@@ -253,7 +253,7 @@ export function ScheduleEditor({
 					(calendar ? (
 						<div className="actions">
 							<label>
-								Time
+								Time{" "}
 								<input
 									aria-label="Calendar time"
 									type="time"
@@ -265,7 +265,7 @@ export function ScheduleEditor({
 								/>
 							</label>
 							<label>
-								Starts
+								Starts{" "}
 								<input
 									aria-label="Calendar start date"
 									type="date"
@@ -281,7 +281,7 @@ export function ScheduleEditor({
 						</div>
 					) : (
 						<label>
-							Local date and time
+							Local date and time{" "}
 							<input
 								aria-label="Local date and time"
 								type="datetime-local"
@@ -295,7 +295,7 @@ export function ScheduleEditor({
 						</label>
 					))}
 				<label>
-					Time zone
+					Time zone{" "}
 					<input
 						aria-label="Time zone"
 						value={timeZone}
@@ -347,7 +347,7 @@ export function ScheduleEditor({
 					</pre>
 				)}
 				<label className="select-row">
-					Model
+					Model{" "}
 					<select
 						aria-label="Schedule model"
 						value={model}
@@ -370,6 +370,7 @@ export function ScheduleEditor({
 						Cancel
 					</button>
 					<button
+						type="submit"
 						className="primary"
 						disabled={!prompt.trim() || !model || saving}
 					>

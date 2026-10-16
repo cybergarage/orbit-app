@@ -23,4 +23,4 @@ jobs:
       - run: npx playwright install-deps chromium
       - run: xvfb-run -a npx playwright test
       - name: Offline worker import and shell smoke check
-        run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --workdir /opt/worker --entrypoint node orbit-app-worker:core-0.9.1 --input-type=module -e "import {Agent} from '@cybergarage/orbit'; import {execFileSync} from 'node:child_process'; if(typeof Agent !== 'function')process.exit(1); console.log(execFileSync('bash',['-lc','echo worker-ready']).toString());"
+        run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --workdir /opt/worker --entrypoint node orbit-app-worker:core-0.9.2 --input-type=module -e "import {Agent} from '@cybergarage/orbit'; import {execFileSync} from 'node:child_process'; if(typeof Agent !== 'function')process.exit(1); console.log(execFileSync('bash',['-lc','echo worker-ready']).toString());"

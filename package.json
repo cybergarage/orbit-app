@@ -15,7 +15,7 @@
     "test": "tsx --test test/*.test.ts worker/*.test.mjs",
     "test:ui": "npm run build && playwright test",
     "test:live": "tsx scripts/live.ts",
-    "worker:build": "docker build -t orbit-app-worker:core-0.9.1 worker",
+    "worker:build": "docker build -t orbit-app-worker:core-0.9.2 worker",
     "package": "npm run build && node scripts/package.mjs"
   },
   "dependencies": {

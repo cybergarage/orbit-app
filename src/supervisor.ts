@@ -45,6 +45,7 @@ export class Supervisor {
 	private recoveryBlocked = false;
 	private reconciling?: Promise<void>;
 	private saveQueue = Promise.resolve();
+	private readonly operations = new Set<Promise<unknown>>();
 	constructor(
 		root: string,
 		private changed: (state: Snapshot) => void,
@@ -398,14 +399,34 @@ export class Supervisor {
 		await this.worker?.stop();
 	}
 
-	async dispatch(commandName: string, p: any = {}) {
+	private requireRenameRevision(p: any) {
+		identifier(p.operationId);
+		if (!Number.isSafeInteger(p.expectedRevision) || p.expectedRevision < 0)
+			throw Error(
+				"Expected name revision is required; refresh before renaming",
+			);
+	}
+
+	dispatch(commandName: string, p: any = {}) {
+		if (this.closed) return Promise.reject(Error("App is closing"));
+		const operation = this.dispatchCommand(commandName, p);
+		this.operations.add(operation);
+		void operation
+			.finally(() => this.operations.delete(operation))
+			.catch(() => {});
+		return operation;
+	}
+	private async dispatchCommand(commandName: string, p: any) {
 		if (
-			["move-session", "select-model"].includes(commandName) &&
+			["move-session", "select-model", "rename-session"].includes(
+				commandName,
+			) &&
 			this.admittingSessionId === p.sessionId
 		)
 			throw new Error("Running or recovery-pending sessions cannot be changed");
 		switch (commandName) {
 			case "snapshot":
+				await this.store.refreshNames();
 				return structuredClone(this.store.state);
 			case "health":
 				return this.health();
@@ -419,6 +440,7 @@ export class Supervisor {
 				return result;
 			}
 			case "edit-project": {
+				this.requireRenameRevision(p);
 				const result = await this.store.editProject(p);
 				await this.publish();
 				return result;
@@ -430,11 +452,13 @@ export class Supervisor {
 				return session;
 			}
 			case "rename-project": {
+				this.requireRenameRevision(p);
 				const result = await this.store.renameProject(p);
 				await this.publish();
 				return result;
 			}
 			case "rename-session": {
+				this.requireRenameRevision(p);
 				const result = await this.store.renameSession(p);
 				await this.publish();
 				return result;
@@ -590,6 +614,7 @@ export class Supervisor {
 	async close() {
 		this.closed = true;
 		await this.cancel();
+		await Promise.allSettled([...this.operations]);
 		await this.saveQueue;
 	}
 }

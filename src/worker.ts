@@ -3,13 +3,14 @@ import { createInterface } from "node:readline";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-export const image = "docker.io/library/orbit-app-worker:0.1.0";
+export const image = "docker.io/library/orbit-app-worker:core-0.9.1";
 export const dockerPath =
 	process.platform === "darwin" ? "/usr/local/bin/docker" : "docker";
 export function dockerArgs(name: string, workspace: string, core: string) {
 	return [
 		"run",
 		"--rm",
+		"--pull=never",
 		"-i",
 		"--name",
 		name,

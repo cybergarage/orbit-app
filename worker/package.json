@@ -3,6 +3,6 @@
 	"private": true,
 	"type": "module",
 	"dependencies": {
-		"@cybergarage/orbit": "0.8.1"
+		"@cybergarage/orbit": "0.9.1"
 	}
 }

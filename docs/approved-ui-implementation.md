@@ -1,3 +1,5 @@
+> Historical UI implementation record. Current core dependency and name ownership are described in [core-backed display names](core-display-names.md).
+
 # Approved Figma implementation update — 2026-10-15
 
 Branch: `codex/approved-figma-ui`, based on fetched `origin/main` at `6c0172b` (PR #5). The original checkout was clean and remains on its original main; no stash, backup, or history copy was created. This worktree reuses the existing dependencies through an ignored symlink.

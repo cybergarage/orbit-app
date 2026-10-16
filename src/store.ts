@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import type { Snapshot, Project, DesktopSession } from "./types";
+import { ContainerCoreNames, type CoreNames } from "./core-names";
 export function identifier(value: unknown): string {
 	if (typeof value !== "string" || !/^[a-f0-9-]{36}$/.test(value))
 		throw new Error("Invalid identifier");
@@ -16,7 +17,10 @@ export function text(value: unknown, max = 12000): string {
 export class Store {
 	state: Snapshot = { projects: [], schedules: [] };
 	private writes = Promise.resolve();
-	constructor(readonly root: string) {}
+	constructor(
+		readonly root: string,
+		private readonly names: CoreNames = new ContainerCoreNames(root),
+	) {}
 	async init() {
 		await fs.mkdir(this.root, { recursive: true, mode: 0o700 });
 		try {
@@ -27,6 +31,12 @@ export class Store {
 			if (e.code !== "ENOENT") throw e;
 		}
 
+		if (this.state.projects.length && this.state.namesVersion !== 1)
+			throw Error(
+				`Legacy App names are unsupported at ${this.root}. Existing data was not changed. Use a fresh data directory after explicitly handling the old data.`,
+			);
+		await this.refreshNames();
+		this.state.namesVersion = 1;
 		this.state.executions ??= [];
 		for (const run of this.state.executions)
 			if (!run.endedAt) {
@@ -63,7 +73,25 @@ export class Store {
 		await this.save();
 	}
 	async save() {
-		const data = JSON.stringify(this.state);
+		const data = JSON.stringify({
+			...this.state,
+			namesVersion: 1,
+			projects: this.state.projects.map((project) => {
+				const {
+					name: _name,
+					nameRevision: _revision,
+					sessions,
+					...metadata
+				} = project;
+				return {
+					...metadata,
+					sessions: sessions.map(
+						({ name: _title, nameRevision: _titleRevision, ...session }) =>
+							session,
+					),
+				};
+			}),
+		});
 		this.writes = this.writes.then(async () => {
 			const file = path.join(this.root, "state.json");
 			await fs.writeFile(`${file}.tmp`, data, { mode: 0o600 });
@@ -71,6 +99,38 @@ export class Store {
 		});
 		await this.writes;
 	}
+	async refreshNames() {
+		for (const project of this.state.projects) {
+			const named = await this.names.call(this.core(project.id), {
+				command: "read-project",
+				projectId: project.id,
+			});
+			if (named.revision >= (project.nameRevision ?? 0)) {
+				project.name = named.name;
+				project.nameRevision = named.revision;
+			}
+			const groups = new Map<string, DesktopSession[]>();
+			for (const session of project.sessions) {
+				const original = session.storageProjectId ?? project.id;
+				groups.set(original, [...(groups.get(original) ?? []), session]);
+			}
+			for (const [original, sessions] of groups) {
+				const titles = await this.names.call(this.core(original), {
+					command: "read-sessions",
+					sessionIds: sessions.map((item) => item.id),
+				});
+				for (const session of sessions) {
+					const title = titles.find((item: any) => item.id === session.id);
+					if (!title) throw Error("Missing core session title");
+					if (title.revision >= (session.nameRevision ?? 0)) {
+						session.name = title.name;
+						session.nameRevision = title.revision;
+					}
+				}
+			}
+		}
+	}
+
 	project(id: unknown): Project {
 		const p = this.state.projects.find((p) => p.id === identifier(id));
 		if (!p) throw new Error("Project not found");
@@ -97,9 +157,16 @@ export class Store {
 			unassigned,
 			sessions: [],
 		};
-		this.state.projects.push(p);
 		await fs.mkdir(this.workspace(p.id), { recursive: true, mode: 0o700 });
 		await fs.mkdir(this.core(p.id), { recursive: true, mode: 0o700 });
+		const named = await this.names.call(this.core(p.id), {
+			command: "create-project",
+			projectId: p.id,
+			name: p.name,
+		});
+		p.name = named.name;
+		p.nameRevision = named.revision;
+		this.state.projects.push(p);
 		await this.save();
 		return p;
 	}
@@ -113,6 +180,21 @@ export class Store {
 			storageProjectId: p.id,
 			workspace: p.directory ?? this.workspace(p.id),
 		};
+		await this.names.call(this.core(p.id), {
+			command: "create-session",
+			sessionId: s.id,
+			name: s.name,
+			operationId: randomUUID(),
+		});
+		const named = await this.names.call(this.core(p.id), {
+			command: "rename-session",
+			sessionId: s.id,
+			name: s.name,
+			expectedRevision: 0,
+			operationId: randomUUID(),
+		});
+		s.name = named.name;
+		s.nameRevision = named.revision;
 		p.sessions.push(s);
 		await this.save();
 		return s;
@@ -229,21 +311,43 @@ export class Store {
 		const directory = await this.directory(p.directory);
 		const name = text(p.name, 80),
 			instructions = this.instructions(p.instructions);
-		Object.assign(project, { name, directory, instructions });
+		if (name !== project.name) await this.renameProject({ ...p, name });
+		Object.assign(project, { directory, instructions });
 		await this.save();
 		return project;
 	}
 	async renameProject(p: any) {
 		const project = this.project(p.projectId);
-		project.name = text(p.name, 80);
+		if (this.state.active?.projectId === project.id)
+			throw Error("Running project cannot be renamed");
+		const named = await this.names.call(this.core(project.id), {
+			command: "rename-project",
+			projectId: project.id,
+			name: text(p.name, 80),
+			expectedRevision: p.expectedRevision ?? project.nameRevision,
+			operationId: p.operationId ?? randomUUID(),
+		});
+		project.name = named.name;
+		project.nameRevision = named.revision;
 		await this.save();
 		return project;
 	}
 	async renameSession(p: any) {
-		const s = this.session(p.projectId, p.sessionId);
-		s.name = text(p.name, 80);
+		const session = this.assertMovable(p.projectId, p.sessionId);
+		const named = await this.names.call(
+			this.location(p.projectId, p.sessionId).core,
+			{
+				command: "rename-session",
+				sessionId: session.id,
+				name: text(p.name, 80),
+				expectedRevision: p.expectedRevision ?? session.nameRevision,
+				operationId: p.operationId ?? randomUUID(),
+			},
+		);
+		session.name = named.name;
+		session.nameRevision = named.revision;
 		await this.save();
-		return s;
+		return session;
 	}
 	async moveSession(p: any) {
 		const source = this.project(p.projectId),

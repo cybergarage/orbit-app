@@ -7,6 +7,7 @@ export interface EventRecord {
 	data: any;
 }
 export interface DesktopSession {
+	lastUserSubmission?: { at: number; sequence: number };
 	autoTitle?: {
 		stage: "new" | "pending" | "generating" | "done" | "failed" | "manual";
 		generation: number;
@@ -65,6 +66,7 @@ export interface Execution {
 	events: EventRecord[];
 }
 export interface Snapshot {
+	submissionSequence?: number;
 	appearance?: "system" | "light" | "dark";
 	namesVersion?: number;
 	executions?: Execution[];

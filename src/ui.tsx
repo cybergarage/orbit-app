@@ -1,3 +1,4 @@
+import { orderedChats } from "./chat-order";
 import { ScheduleEditor } from "./schedule-editor";
 import { describeRepeat, scheduledTime } from "./scheduling";
 import { useState, useEffect, useRef, type ReactNode } from "react";
@@ -1295,7 +1296,7 @@ function App() {
 										</button>
 									</div>
 									{!collapsed.has(p.id) &&
-										p.sessions.map((s) => (
+										orderedChats(p.sessions).map((s) => (
 											<div className="row session-row" key={s.id}>
 												<button
 													type="button"
@@ -1323,7 +1324,7 @@ function App() {
 						{state.projects
 							.filter((p) => p.unassigned)
 							.flatMap((p) =>
-								p.sessions.map((s) => (
+								orderedChats(p.sessions).map((s) => (
 									<div className="row" key={s.id}>
 										<button
 											type="button"

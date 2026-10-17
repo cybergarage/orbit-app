@@ -12,7 +12,7 @@
     "build": "tsc --noEmit && node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint src test scripts worker --error-on-warnings",
-    "test": "tsx --test test/*.test.ts worker/*.test.mjs",
+    "test": "tsx --test --test-concurrency=1 test/*.test.ts worker/*.test.mjs",
     "test:ui": "npm run build && playwright test",
     "test:live": "tsx scripts/live.ts",
     "worker:build": "docker build -t orbit-app-worker:core-0.9.3 worker",

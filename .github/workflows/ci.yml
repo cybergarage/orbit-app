@@ -25,6 +25,7 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run worker:build
+      # Host-wide lsof inspection must not race other fixture Docker mounts.
       - run: npm test
       - run: npm run build
       - run: npx playwright install-deps chromium

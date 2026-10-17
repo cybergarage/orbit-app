@@ -1,3 +1,4 @@
+import { initializationAvailability } from "./initialization";
 import { AutoTitles, generateTitle } from "./auto-titles";
 import { resolveSchedule, nextOccurrence } from "./scheduling";
 import fs from "node:fs/promises";
@@ -470,6 +471,8 @@ export class Supervisor {
 		)
 			throw new Error("Running or recovery-pending sessions cannot be changed");
 		switch (commandName) {
+			case "initialization-status":
+				return { ...initializationAvailability, root: this.store.root };
 			case "snapshot":
 				await this.store.refreshNames();
 				return structuredClone(this.store.state);

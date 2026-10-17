@@ -1,3 +1,4 @@
+import { InitializationSettings } from "./initialization-settings";
 import { orderedChats } from "./chat-order";
 import { ScheduleEditor } from "./schedule-editor";
 import { describeRepeat, scheduledTime } from "./scheduling";
@@ -1195,6 +1196,18 @@ function App() {
 						>
 							Status
 						</button>
+						<button
+							type="button"
+							className={
+								settingsCategory === "initialization" ? "selected" : ""
+							}
+							onClick={() => {
+								setView("settings");
+								setSettingsCategory("initialization");
+							}}
+						>
+							Initialization
+						</button>
 					</>
 				) : view === "scheduled" || view === "schedule" ? (
 					<>
@@ -1376,6 +1389,9 @@ function App() {
 					</div>
 				)}
 				{!dialog && renderProjectEditor()}
+				{!dialog &&
+					view === "settings" &&
+					settingsCategory === "initialization" && <InitializationSettings />}
 				{!dialog &&
 					view === "settings" &&
 					settingsCategory === "appearance" && (

@@ -2,7 +2,11 @@ import { AppInitialization } from "./initialization-host";
 import type { InitializationMode } from "./initialization";
 import { initializationAvailability } from "./initialization";
 import { AutoTitles, generateTitle } from "./auto-titles";
-import { resolveSchedule, nextOccurrence } from "./scheduling";
+import {
+	resolveSchedule,
+	nextOccurrence,
+	resumeOccurrence,
+} from "./scheduling";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { Store, text, identifier, assertAppProfileRoot } from "./store";
@@ -783,21 +787,46 @@ export class Supervisor {
 					model: text(p.model, 120),
 					nextAt: Number(at),
 					intervalMs: interval,
-					enabled: true,
+					enabled: existing?.enabled ?? true,
 				};
 				if (existing) Object.assign(existing, s);
 				else this.store.state.schedules.push(s);
 				await this.publish();
 				return s;
 			}
+			case "enable-schedule":
+			case "delete-schedule":
 			case "disable-schedule": {
 				const s = this.store.state.schedules.find(
 					(s) => s.id === identifier(p.id),
 				);
 				if (!s) throw new Error("Schedule not found");
-				s.enabled = false;
+				if (commandName === "delete-schedule") {
+					if (p.confirmation !== s.id)
+						throw new Error("Confirm deletion of this scheduled task.");
+					// Definitions only: admitted executions, history, chats and files survive.
+					this.store.state.schedules = this.store.state.schedules.filter(
+						(item) => item.id !== s.id,
+					);
+				} else if (commandName === "enable-schedule") {
+					if (s.enabled) return s;
+					const oneTime = s.plan
+						? s.plan.repeat.kind === "none"
+						: s.intervalMs === 0;
+					if (
+						oneTime &&
+						this.store.state.executions?.some(
+							(run) => run.scheduleId === s.id && run.dueAt === s.nextAt,
+						)
+					)
+						throw new Error(
+							"This one-time task was already admitted. Edit its first-run time before enabling.",
+						);
+					s.nextAt = resumeOccurrence(s, Date.now());
+					s.enabled = true;
+				} else s.enabled = false;
 				await this.publish();
-				return;
+				return s;
 			}
 			default:
 				throw new Error("Unknown command");

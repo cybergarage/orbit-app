@@ -120,6 +120,29 @@ export function nextOccurrence(
 		slot++;
 	}
 }
+/** Resume at the retained future slot, skipping slots elapsed while disabled. */
+export function resumeOccurrence(
+	schedule: { nextAt: number; intervalMs: number; plan?: SchedulePlan },
+	now: number,
+): number {
+	if (!Number.isFinite(schedule.nextAt))
+		throw new Error(
+			"Invalid saved schedule time. Edit the task before enabling.",
+		);
+	if (schedule.nextAt > now) return schedule.nextAt;
+	const next = schedule.plan
+		? nextOccurrence(schedule.plan, now)
+		: schedule.intervalMs > 0
+			? schedule.nextAt +
+				(Math.floor((now - schedule.nextAt) / schedule.intervalMs) + 1) *
+					schedule.intervalMs
+			: undefined;
+	if (next === undefined || !Number.isFinite(next) || next <= now)
+		throw new Error(
+			"This one-time task has no future run. Edit its first-run time before enabling.",
+		);
+	return next;
+}
 export function describeRepeat(rule: RepeatRule) {
 	if (rule.kind === "none") return "Does not repeat";
 	if (rule.kind === "interval") return `Every ${rule.minutes} minutes`;

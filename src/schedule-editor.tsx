@@ -138,6 +138,12 @@ export function ScheduleEditor({
 					coalesce into one; interrupted runs are not replayed.
 				</p>
 			</div>
+			{existing && !existing.enabled && (
+				<p className="notice">
+					This task is disabled. Saving edits keeps it disabled; use Enable when
+					you are ready.
+				</p>
+			)}
 			<form
 				className="schedule-form"
 				onSubmit={async (e) => {

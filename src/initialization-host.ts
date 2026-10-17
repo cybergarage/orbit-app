@@ -135,10 +135,11 @@ async function assertNoWritableHandles(target: string) {
 export async function assertExternalWritersStopped(
 	root: string,
 	targets: string[],
+	inspectCommand = command,
 ) {
 	root = await fs.realpath(root);
 	// Inspect mount sources and restart policy only; never retrieve container environments.
-	const ids = (await command(dockerPath, ["ps", "-aq"]))
+	const ids = (await inspectCommand(dockerPath, ["ps", "-aq", "--no-trunc"]))
 		.trim()
 		.split(/\s+/)
 		.filter(Boolean);
@@ -148,13 +149,23 @@ export async function assertExternalWritersStopped(
 		);
 	for (const id of ids) {
 		const info = JSON.parse(
-			await command(dockerPath, [
+			await inspectCommand(dockerPath, [
 				"inspect",
 				"--format",
 				'{"mounts":{{json .Mounts}},"running":{{.State.Running}},"restart":{{json .HostConfig.RestartPolicy}}}',
 				id,
-			]),
+			]).catch(async (error) => {
+				// An auto-removed helper may disappear between inventory and inspect.
+				// Accept disappearance only after a successful fresh daemon query.
+				if (!/no such (object|container)/i.test(String(error))) throw error;
+				const remaining = await inspectCommand(dockerPath, [
+					"ps", "-aq", "--no-trunc", "--filter", `id=${id}`,
+				]);
+				if (remaining.trim()) throw error;
+				return "null";
+			}),
 		);
+		if (!info) continue;
 		if (
 			(info.running || !["", "no"].includes(info.restart.Name)) &&
 			info.mounts.some(

@@ -10,7 +10,7 @@ import { InitializationSettings } from "../src/initialization-settings";
 import { initializationAvailability } from "../src/initialization";
 import { Supervisor } from "../src/supervisor";
 import { Store, assertAppProfileRoot } from "../src/store";
-import { AppInitialization } from "../src/initialization-host";
+import { AppInitialization, assertExternalWritersStopped } from "../src/initialization-host";
 import { containerMaintenance } from "../src/maintenance-container";
 
 const consent = {
@@ -752,4 +752,25 @@ test("a saved workspace overlapping a core target refuses deletion", async (t) =
 	);
 	assert.ok(await fs.readFile(Store.stateFile(root), "utf8"));
 	await sup.close();
+});
+
+
+test("container inventory disappearance needs successful fresh absence confirmation", async (t) => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-inspection-"));
+	t.after(() => fs.rm(root, { recursive: true, force: true }));
+	for (const outcome of ["absent", "present", "unavailable", "other-error"]) {
+		const calls: string[][] = [];
+		const inspect = async (_exe: string, args: string[]) => {
+			calls.push(args);
+			if (calls.length === 1) return "a".repeat(64);
+			if (calls.length === 2) throw new Error(outcome === "other-error" ? "daemon unavailable" : "no such object");
+			if (outcome === "unavailable") throw new Error("daemon unavailable");
+			return outcome === "present" ? "a".repeat(64) : "";
+		};
+		const result = assertExternalWritersStopped(root, [], inspect);
+		if (outcome === "absent") await result;
+		else await assert.rejects(result);
+		assert.equal(calls.length, outcome === "other-error" ? 2 : 3);
+		if (calls.length === 3) assert.deepEqual(calls[2], ["ps", "-aq", "--no-trunc", "--filter", `id=${"a".repeat(64)}`]);
+	}
 });

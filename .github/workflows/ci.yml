@@ -14,6 +14,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Enable complete host handle inspection on the disposable runner
+        # Docker overlay/netns mounts otherwise produce incomplete lsof output.
+        # Keep the App fail-closed; grant only the inspector read/trace access.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lsof libcap2-bin
+          sudo setcap cap_dac_read_search,cap_sys_ptrace+ep /usr/bin/lsof
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck

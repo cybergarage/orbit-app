@@ -63,3 +63,5 @@ See [core-backed names and storage requirements](docs/core-display-names.md) for
 See [approved UI implementation and current validation](docs/approved-ui-implementation.md) for the latest local implementation status.
 
 See [verification and security limitations](docs/verification.md) for tested behavior, the advisory, and residual risks.
+
+Chats within each Project and the unassigned Chats group follow accepted user submissions, newest first. Typing, viewing, responses, names and scheduled work do not affect this order. Rejected requests do not move Chats; failures after acceptance keep their position. Order survives restart and project moves. Older Chats without explicit submission ordering retain their relative saved order until their next user submission; historical submissions have no reliable human/schedule origin and are not inferred. Project order is unchanged.

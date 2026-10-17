@@ -182,19 +182,24 @@ export class Supervisor {
 		await this.publish();
 		return health;
 	}
-	async submit(p: any) {
+	async submit(p: any, scheduled = false) {
 		const execution = this.store.state.executions?.find(
 			(r) => r.requestId === p.requestId,
 		);
 		if (this.closed) throw new Error("App is closing");
-		if (this.admitted) throw new Error("A worker is already active");
+		if (this.admitted || this.store.state.active)
+			throw new Error("A worker is already active");
+		if (this.recoveryBlocked)
+			throw new Error("Previous worker recovery is blocked");
 		const session = this.store.session(p.projectId, p.sessionId);
 		const prompt = text(p.prompt);
 		const model = text(p.model, 120);
 		identifier(p.requestId);
 		if (
 			session.events.some(
-				(e) => e.type === "submission" && e.data.requestId === p.requestId,
+				(e) =>
+					["submission", "submission-accepted"].includes(e.type) &&
+					e.data.requestId === p.requestId,
 			)
 		)
 			throw new Error("Duplicate request");
@@ -215,6 +220,24 @@ export class Supervisor {
 		};
 		this.currentRun = run;
 		try {
+			const acceptedAt = Date.now();
+			if (!scheduled) {
+				const sequence = (this.store.state.submissionSequence ?? 0) + 1;
+				if (!Number.isSafeInteger(sequence))
+					throw new Error("Submission sequence exhausted");
+				this.store.state.submissionSequence = sequence;
+				session.lastUserSubmission = { at: acceptedAt, sequence };
+			}
+			session.events.push({
+				id: randomUUID(),
+				type: "submission-accepted",
+				at: new Date(acceptedAt).toISOString(),
+				data: {
+					requestId: p.requestId,
+					origin: scheduled ? "schedule" : "user",
+				},
+			});
+			await this.publish();
 			await this.titles.interrupt();
 			if (epoch !== this.epoch || this.closed)
 				throw new Error("Submission cancelled");
@@ -673,13 +696,16 @@ export class Supervisor {
 			if (next !== undefined) s.nextAt = next;
 			await this.publish();
 			try {
-				await this.submit({
-					projectId: execution.projectId,
-					sessionId: execution.sessionId,
-					prompt: execution.prompt,
-					model: execution.model,
-					requestId: execution.requestId,
-				});
+				await this.submit(
+					{
+						projectId: execution.projectId,
+						sessionId: execution.sessionId,
+						prompt: execution.prompt,
+						model: execution.model,
+						requestId: execution.requestId,
+					},
+					true,
+				);
 			} catch (e) {
 				const session = this.store.session(s.projectId, s.sessionId);
 				const cancelled =

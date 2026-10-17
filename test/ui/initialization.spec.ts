@@ -109,6 +109,8 @@ for (const mode of ["settings", "data", "all"] as const)
 			await action.click();
 			await expect(page.getByRole("status")).toContainText(
 				"Initialization completed",
+				// Real Docker verification and deletion exceed a short DOM-only wait on Linux.
+				{ timeout: 30000 },
 			);
 			await expect(
 				page.getByRole("button", { name: "Restart App", exact: true }),

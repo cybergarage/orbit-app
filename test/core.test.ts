@@ -714,6 +714,8 @@ test("requested cancellation classifies a cancelled model failure without rewrit
 		f.session.events.find((e) => e.type === "result")?.requestId,
 		requestId,
 	);
+	// A restart must drain title/persistence writers before reopening the profile.
+	await f.supervisor.close();
 	const restored = new Store(f.supervisor.store.root);
 	await restored.init();
 	assert.equal(

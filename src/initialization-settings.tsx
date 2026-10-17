@@ -46,12 +46,12 @@ export function InitializationSettings() {
 						disabled
 						aria-label={`Review ${title.toLowerCase()}`}
 					>
-						Review targets (requires core release)
+						Review targets (requires Electron adapter)
 					</button>
 				</div>
 			))}
 			<p>
-				Available in a future release: target paths and counts, explicit
+				Pending Electron integration: target paths and counts, explicit
 				confirmation, and verified shutdown before changes. Permanent deletion
 				and OS Trash must be clearly distinguished. No reset or backup is
 				performed by this screen.

@@ -7,7 +7,7 @@ import { InitializationSettings } from "../src/initialization-settings";
 import { initializationAvailability } from "../src/initialization";
 import { Supervisor } from "../src/supervisor";
 
-test("initialization preparation is read-only and remains gated on the actual pinned core", async () => {
+test("initialization preparation is read-only and remains gated on the Electron adapter", async () => {
 	const pkg = JSON.parse(
 		await fs.readFile(
 			new URL("../worker/package.json", import.meta.url),
@@ -40,7 +40,7 @@ test("all three initialization scopes are visible but destructive actions are di
 		"Reset settings",
 		"Reset conversations, projects and schedules",
 		"Reset all app settings, saved data and owned cache",
-		"pinned 0.9.2",
+		"core 0.9.3",
 		"No reset or backup",
 		"external workspaces",
 	])

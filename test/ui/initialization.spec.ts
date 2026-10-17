@@ -21,7 +21,7 @@ test("initialization settings show three gated scopes without data changes or a 
 		await expect(
 			page.getByRole("heading", { name: "Initialization", exact: true }),
 		).toBeVisible();
-		await expect(page.getByRole("status")).toContainText("pinned 0.9.2");
+		await expect(page.getByRole("status")).toContainText("Published Orbit core 0.9.3");
 		await expect(
 			page.getByText(`App storage: ${root}`, { exact: true }),
 		).toBeVisible();

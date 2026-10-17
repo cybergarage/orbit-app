@@ -1,6 +1,6 @@
 # Core-backed display names
 
-Orbit App pins the published `@cybergarage/orbit` **0.9.2** package and its npm integrity in `worker/package-lock.json`. The single development image tag is `orbit-app-worker:core-0.9.2`; builds reuse that tag, never replace the preceding image tag, and runtime uses `--pull=never`. Neither a neighboring Orbit checkout nor an unpublished source artifact is used.
+Orbit App pins the published `@cybergarage/orbit` **0.9.3** package and its npm integrity in `worker/package-lock.json`. The single development image tag is `orbit-app-worker:core-0.9.3`; builds reuse that tag, never replace the preceding image tag, and runtime uses `--pull=never`. Neither a neighboring Orbit checkout nor an unpublished source artifact is used.
 
 ## Ownership and storage
 

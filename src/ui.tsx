@@ -1,7 +1,7 @@
 import { InitializationSettings } from "./initialization-settings";
 import { orderedChats } from "./chat-order";
+import { ScheduleCard } from "./schedule-card";
 import { ScheduleEditor } from "./schedule-editor";
-import { describeRepeat, scheduledTime } from "./scheduling";
 import { useState, useEffect, useRef, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import type { Snapshot, EventRecord, Schedule } from "./types";
@@ -183,43 +183,15 @@ function App() {
 			);
 		}
 		return state.schedules.map((s) => (
-			<div className="card" key={s.id}>
-				<strong>{s.prompt}</strong>
-				<p>
-					{state.projects.find((p) => p.id === s.projectId)?.name} · {s.model}
-				</p>
-				{s.plan && (
-					<p>
-						First: {scheduledTime(s.plan.firstAt, s.plan.timeZone)} ·{" "}
-						{s.plan.timeZone}
-					</p>
-				)}
-				<p>
-					{s.enabled
-						? `Next: ${s.plan ? `${scheduledTime(s.nextAt, s.plan.timeZone)} · ${s.plan.timeZone}` : new Date(s.nextAt).toLocaleString()}`
-						: "Disabled"}{" "}
-					·{" "}
-					{s.plan
-						? describeRepeat(s.plan.repeat)
-						: s.intervalMs
-							? `Every ${s.intervalMs / 3600000} hours`
-							: "One time"}
-				</p>
-				<button type="button" onClick={() => openSchedule(s)}>
-					Edit schedule
-				</button>
-				<button
-					type="button"
-					disabled={!s.enabled}
-					onClick={() =>
-						void action(() =>
-							window.orbit.call("disable-schedule", { id: s.id }),
-						)
-					}
-				>
-					{s.enabled ? "Disable" : "Disabled"}
-				</button>
-			</div>
+			<ScheduleCard
+				key={s.id}
+				schedule={s}
+				projectName={state.projects.find((p) => p.id === s.projectId)?.name}
+				running={
+					!!state.executions?.some((r) => r.scheduleId === s.id && !r.endedAt)
+				}
+				onEdit={() => openSchedule(s)}
+			/>
 		));
 	}
 

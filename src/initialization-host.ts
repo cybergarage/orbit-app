@@ -109,7 +109,9 @@ async function assertNoWritableHandles(target: string) {
 			(error, stdout, stderr) => {
 				if (stderr.trim() || (error && error.code !== 1))
 					return reject(
-						new Error(`Cannot verify external storage handles: ${target} (${error?.code ?? "stderr"}; ${stderr.trim().slice(0, 1500)})`),
+						new Error(
+							`Cannot verify external storage handles: ${target} (${error?.code ?? "stderr"}; ${stderr.trim().slice(0, 1500)})`,
+						),
 					);
 				resolve(stdout);
 			},
@@ -192,7 +194,15 @@ export class AppInitialization {
 	get marker() {
 		return path.join(this.store.root, "initialization-maintenance.json");
 	}
-	async readMarker(): Promise<{ phase: string; error?: string } | undefined> {
+	async readMarker(): Promise<
+		| {
+				phase: string;
+				error?: string;
+				mode?: InitializationMode;
+				includeSettings?: boolean;
+		  }
+		| undefined
+	> {
 		const info = await exists(this.marker);
 		if (!info) return;
 		if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1)
@@ -203,24 +213,44 @@ export class AppInitialization {
 			!["stopping", "stopped", "executing", "failed", "complete"].includes(
 				value.phase,
 			) ||
-			Object.keys(value).some((k) => !["phase", "error"].includes(k)) ||
+			Object.keys(value).some(
+				(k) => !["phase", "error", "mode", "includeSettings"].includes(k),
+			) ||
+			(value.mode !== undefined &&
+				!["settings", "data", "all"].includes(value.mode)) ||
+			(value.includeSettings !== undefined &&
+				typeof value.includeSettings !== "boolean") ||
+			(value.mode === undefined) !== (value.includeSettings === undefined) ||
 			(value.error !== undefined && typeof value.error !== "string")
 		)
 			throw new Error("Unknown maintenance record; keep storage unchanged");
 		return value;
 	}
-	async mark(phase: string, error?: string) {
+	async mark(
+		phase: string,
+		error?: string,
+		scope?: { mode: InitializationMode; includeSettings: boolean },
+	) {
 		await assertAppProfileRoot(this.store.root);
-		await this.readMarker();
+		const previous = await this.readMarker();
+		const pendingScope =
+			scope ??
+			(previous?.mode
+				? { mode: previous.mode, includeSettings: previous.includeSettings }
+				: {});
 		const temporary = path.join(
 			this.store.root,
 			`.initialization-control-${randomUUID()}.tmp`,
 		);
 		try {
-			await fs.writeFile(temporary, JSON.stringify({ phase, error }), {
-				mode: 0o600,
-				flag: "wx",
-			});
+			await fs.writeFile(
+				temporary,
+				JSON.stringify({ phase, error, ...pendingScope }),
+				{
+					mode: 0o600,
+					flag: "wx",
+				},
+			);
 			await fs.rename(temporary, this.marker);
 		} finally {
 			await fs.unlink(temporary).catch((e) => {
@@ -239,6 +269,7 @@ export class AppInitialization {
 			throw new Error(
 				"Explicitly select App settings before reviewing this scope",
 			);
+		includeSettings = mode !== "data" && includeSettings === true;
 		const root = this.store.root;
 		const canonical = await fs.realpath(root);
 		if (
@@ -406,6 +437,16 @@ export class AppInitialization {
 		if (this.busy || this.completed)
 			throw new Error("Initialization is already running or completed");
 		this.finalPlan = undefined;
+		const pending = await this.readMarker();
+		if (
+			pending?.mode &&
+			pending.phase !== "complete" &&
+			mode !== pending.mode &&
+			mode !== "all"
+		)
+			throw new Error(
+				"Incomplete initialization scope cannot be narrowed; retry the original scope or all App data and settings",
+			);
 		const plan = await this.plan(mode, includeSettings);
 		await this.external(
 			this.store.root,
@@ -449,7 +490,10 @@ export class AppInitialization {
 					action: "verify",
 					consent: offlineConsent,
 				});
-			await this.mark("executing");
+			await this.mark("executing", undefined, {
+				mode: plan.mode,
+				includeSettings: plan.includeSettings,
+			});
 			const consent = {
 				confirmation: "INITIALIZE" as const,
 				allWritersStopped: true as const,

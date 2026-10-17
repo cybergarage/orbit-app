@@ -371,6 +371,25 @@ test("partial per-store failure lists completed paths, preserves registry and st
 		(await resumed.dispatch("initialization-status")).maintenance,
 		true,
 	);
+	await assert.rejects(
+		resumed.dispatch("initialization-stop", {
+			mode: "settings",
+			includeSettings: true,
+		}),
+		/scope cannot be narrowed/,
+	);
+	const pending = JSON.parse(
+		await fs.readFile(
+			path.join(root, "initialization-maintenance.json"),
+			"utf8",
+		),
+	);
+	assert.equal(pending.mode, "data");
+	assert.equal(pending.includeSettings, false);
+	await assert.rejects(fs.access(path.join(order[0], "sessions")), {
+		code: "ENOENT",
+	});
+	assert.ok(await fs.readFile(Store.stateFile(root), "utf8"));
 	const remaining = await resumed.dispatch("initialization-stop", {
 		mode: "data",
 	});

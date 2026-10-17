@@ -1135,6 +1135,13 @@ function App() {
 			)
 		);
 	}
+	if (state.maintenance)
+		return (
+			<main>
+				<InitializationSettings />
+			</main>
+		);
+
 	return (
 		<div className="app">
 			<nav className="dock" aria-label="Primary navigation">

@@ -59,6 +59,15 @@ async function start() {
 				fileURLToPath(event.senderFrame.url) !== entry
 			)
 				throw new Error("Untrusted IPC sender");
+			if (command === "initialization-restart") {
+				if (!supervisor.initialization.completed)
+					throw new Error(
+						"Initialization must complete before restarting writers",
+					);
+				app.relaunch();
+				app.quit();
+				return;
+			}
 			return supervisor.dispatch(command, payload);
 		});
 		await window.loadFile(entry);
@@ -66,7 +75,7 @@ async function start() {
 			() => void supervisor.tick().catch(console.error),
 			15000,
 		);
-		void supervisor.health();
+		void supervisor.dispatch("health").catch(() => {});
 	} catch (error) {
 		dialog.showErrorBox("Orbit App could not open its data", String(error));
 		app.exit(1);

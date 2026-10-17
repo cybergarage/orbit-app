@@ -21,7 +21,7 @@ async function start() {
 		},
 	});
 	try {
-		await fs.access(path.join(root, "state.json"));
+		await fs.access(path.join(root, "registry", "state.json"));
 		await fixture.sup.store.init();
 	} catch {
 		fixture.sup.store.state = seedOrderFixture();

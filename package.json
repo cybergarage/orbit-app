@@ -19,6 +19,7 @@
     "package": "npm run build && node scripts/package.mjs"
   },
   "dependencies": {
+    "@cybergarage/orbit": "0.9.3",
     "@js-temporal/polyfill": "0.5.1",
     "react": "19.2.8",
     "react-dom": "19.2.8"

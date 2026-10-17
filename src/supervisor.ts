@@ -1,9 +1,11 @@
+import { AppInitialization } from "./initialization-host";
+import type { InitializationMode } from "./initialization";
 import { initializationAvailability } from "./initialization";
 import { AutoTitles, generateTitle } from "./auto-titles";
 import { resolveSchedule, nextOccurrence } from "./scheduling";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { Store, text, identifier } from "./store";
+import { Store, text, identifier, assertAppProfileRoot } from "./store";
 import {
 	Worker,
 	command,
@@ -40,6 +42,12 @@ function displayedStatus(run: RunControl, settled = false) {
 export class Supervisor {
 	readonly store: Store;
 	readonly titles: AutoTitles;
+	readonly initialization: AppInitialization;
+	private maintenance = false;
+	private maintenanceError?: string;
+	private maintenanceTask?: Promise<unknown>;
+	private storageStopped = false;
+	private workerFinished?: Promise<void>;
 	worker?: Worker;
 	private admitted = false;
 	private ticking = false;
@@ -63,11 +71,13 @@ export class Supervisor {
 		titleGenerator = generateTitle,
 	) {
 		this.store = new Store(root);
+		this.initialization = new AppInitialization(this.store);
 		this.titles = new AutoTitles(
 			this.store,
 			() =>
 				!this.admitted &&
 				!this.closed &&
+				!this.maintenance &&
 				!this.recoveryBlocked &&
 				!this.store.state.active,
 			() => this.publish(),
@@ -75,6 +85,29 @@ export class Supervisor {
 		);
 	}
 	async init() {
+		await assertAppProfileRoot(this.store.root);
+		try {
+			const marker = await this.initialization.readMarker();
+			if (marker?.phase === "complete")
+				await fs.unlink(this.initialization.marker);
+			else if (marker) {
+				this.maintenance = true;
+				this.maintenanceError =
+					marker.error ??
+					"Initialization was stopped before completion. Review remaining targets while writers stay stopped.";
+				await this.store.init(true);
+				await this.store.close();
+				await this.titles.close();
+				this.storageStopped = true;
+				this.store.state.maintenance = {
+					error: this.maintenanceError,
+					complete: false,
+				};
+				return;
+			}
+		} catch (error: any) {
+			if (error.code !== "ENOENT") throw error;
+		}
 		await this.store.init();
 		await this.reconcile();
 	}
@@ -132,12 +165,16 @@ export class Supervisor {
 		}
 	}
 	async publish() {
+		if (this.storageStopped)
+			throw new Error("App storage is closed for initialization");
 		this.store.state.recoveryBlocked = this.recoveryBlocked;
 		this.changed(structuredClone(this.store.state));
 		this.saveQueue = this.saveQueue.then(() => this.store.save());
 		await this.saveQueue;
 	}
 	async health(): Promise<Health> {
+		if (this.maintenance)
+			throw new Error("App writers are stopped for initialization");
 		if (this.recoveryBlocked) await this.reconcile();
 		const health: Health = {
 			checkedAt: Date.now(),
@@ -187,7 +224,8 @@ export class Supervisor {
 		const execution = this.store.state.executions?.find(
 			(r) => r.requestId === p.requestId,
 		);
-		if (this.closed) throw new Error("App is closing");
+		if (this.closed || this.maintenance)
+			throw new Error("App writers are stopped or closing");
 		if (this.admitted || this.store.state.active)
 			throw new Error("A worker is already active");
 		if (this.recoveryBlocked)
@@ -240,13 +278,13 @@ export class Supervisor {
 			});
 			await this.publish();
 			await this.titles.interrupt();
-			if (epoch !== this.epoch || this.closed)
+			if (epoch !== this.epoch || this.closed || this.maintenance)
 				throw new Error("Submission cancelled");
 			await this.titles.provision(p.projectId, session, prompt, model);
-			if (epoch !== this.epoch || this.closed)
+			if (epoch !== this.epoch || this.closed || this.maintenance)
 				throw new Error("Submission cancelled");
 			const health = await this.health();
-			if (epoch !== this.epoch || this.closed)
+			if (epoch !== this.epoch || this.closed || this.maintenance)
 				throw new Error("Submission cancelled");
 			if (this.recoveryBlocked)
 				throw new Error(
@@ -262,7 +300,7 @@ export class Supervisor {
 				p.projectId,
 				p.sessionId,
 			);
-			if (epoch !== this.epoch || this.closed)
+			if (epoch !== this.epoch || this.closed || this.maintenance)
 				throw new Error("Submission cancelled");
 			session.status = "starting";
 			session.model = model;
@@ -278,7 +316,7 @@ export class Supervisor {
 				sessionId: p.sessionId,
 			};
 			await this.publish();
-			if (epoch !== this.epoch || this.closed)
+			if (epoch !== this.epoch || this.closed || this.maintenance)
 				throw new Error("Submission cancelled");
 			const worker = this.factory(
 				workspace,
@@ -297,7 +335,7 @@ export class Supervisor {
 			if (this.store.state.active)
 				this.store.state.active.containerName = worker.name;
 			await this.publish();
-			if (epoch !== this.epoch || this.closed) {
+			if (epoch !== this.epoch || this.closed || this.maintenance) {
 				await worker.stop();
 				this.worker = undefined;
 				delete this.store.state.active;
@@ -305,7 +343,7 @@ export class Supervisor {
 				await this.publish();
 				throw new Error("Submission cancelled");
 			}
-			void worker
+			this.workerFinished = worker
 				.start()
 				.catch((e) => {
 					this.receiveEvent(run, { type: "error", data: String(e) });
@@ -374,6 +412,7 @@ export class Supervisor {
 	}
 
 	private receiveEvent(run: RunControl, event: any) {
+		if (this.storageStopped) return;
 		const session = run.session;
 		const record = {
 			id: randomUUID(),
@@ -453,8 +492,112 @@ export class Supervisor {
 			);
 	}
 
-	dispatch(commandName: string, p: any = {}) {
+	private async stopForInitialization(
+		mode: InitializationMode,
+		includeSettings: boolean,
+	) {
+		if (
+			!["settings", "data", "all"].includes(mode) ||
+			(mode !== "data" && includeSettings !== true)
+		)
+			throw new Error(
+				"Select a valid scope and explicitly include its settings",
+			);
+		this.maintenance = true;
+		++this.epoch;
+		this.maintenanceError = undefined;
+		try {
+			await this.initialization.mark("stopping");
+			if (!this.storageStopped) {
+				await this.titles.close();
+				await this.cancel();
+				const drained = await Promise.allSettled(this.operations);
+				const failed = drained.find(
+					(result) =>
+						result.status === "rejected" &&
+						!/Submission cancelled|App writers are stopped or closing/.test(
+							String(result.reason),
+						),
+				);
+				if (failed?.status === "rejected") throw failed.reason;
+				await this.workerFinished;
+				await this.worker?.confirmGone();
+				if (this.recoveryBlocked || this.store.state.active || this.admitted)
+					throw new Error(
+						"Writer shutdown is not confirmed; initialization refused",
+					);
+				await this.saveQueue;
+				await this.store.close();
+				this.storageStopped = true;
+			}
+			await this.initialization.mark("stopped");
+			return await this.initialization.review(mode, includeSettings);
+		} catch (error) {
+			this.maintenanceError = String(error);
+			await this.initialization.mark("failed", this.maintenanceError);
+			throw error;
+		} finally {
+			this.store.state.maintenance = {
+				error: this.maintenanceError,
+				complete: this.initialization.completed,
+			};
+			this.changed(structuredClone(this.store.state));
+		}
+	}
+	dispatch(commandName: string, p: any = {}): Promise<any> {
 		if (this.closed) return Promise.reject(new Error("App is closing"));
+		if (commandName === "initialization-status")
+			return Promise.resolve({
+				...initializationAvailability,
+				root: this.store.root,
+				maintenance: this.maintenance,
+				error: this.maintenanceError,
+				complete: this.initialization.completed,
+				plan: this.initialization.finalPreview,
+			});
+		if (
+			commandName === "initialization-stop" ||
+			commandName === "initialization-execute"
+		) {
+			if (this.initialization.completed)
+				return Promise.reject(
+					new Error("Initialization completed; restart the App"),
+				);
+			if (this.maintenanceTask)
+				return Promise.reject(
+					new Error("Initialization operation already running"),
+				);
+			if (
+				commandName === "initialization-execute" &&
+				(!this.maintenance || !this.storageStopped)
+			)
+				return Promise.reject(
+					new Error("Stop and verify all writers before initialization"),
+				);
+			const operation =
+				commandName === "initialization-stop"
+					? this.stopForInitialization(p.mode, p.includeSettings)
+					: this.initialization.execute(p).catch((error) => {
+							this.maintenanceError = String(error);
+							throw error;
+						});
+			this.maintenanceTask = operation;
+			void operation
+				.finally(() => {
+					this.maintenanceTask = undefined;
+				})
+				.catch(() => {});
+			return operation;
+		}
+		if (this.maintenance) {
+			if (commandName === "snapshot")
+				return Promise.resolve(structuredClone(this.store.state));
+			return Promise.reject(
+				new Error(
+					"App writers are stopped for initialization; review or restart after completion",
+				),
+			);
+		}
 		const operation = this.dispatchCommand(commandName, p);
 		this.operations.add(operation);
 		void operation
@@ -471,8 +614,10 @@ export class Supervisor {
 		)
 			throw new Error("Running or recovery-pending sessions cannot be changed");
 		switch (commandName) {
-			case "initialization-status":
-				return { ...initializationAvailability, root: this.store.root };
+			case "initialization-preview":
+				return this.initialization.preview(p.mode, p.includeSettings);
+			case "tick":
+				return this.tickOnce(p.now);
 			case "snapshot":
 				await this.store.refreshNames();
 				return structuredClone(this.store.state);
@@ -658,13 +803,18 @@ export class Supervisor {
 				throw new Error("Unknown command");
 		}
 	}
-	async tick(now = Date.now()) {
+	tick(now = Date.now()) {
+		if (this.closed || this.maintenance) return Promise.resolve();
+		return this.dispatch("tick", { now });
+	}
+	private async tickOnce(now = Date.now()) {
 		if (this.ticking) return;
 		this.ticking = true;
 		try {
 			if (
 				this.admitted ||
 				this.closed ||
+				this.maintenance ||
 				this.recoveryBlocked ||
 				this.store.state.active
 			)
@@ -741,9 +891,24 @@ export class Supervisor {
 
 	async close() {
 		this.closed = true;
+		if (this.maintenance) {
+			await this.maintenanceTask?.catch(() => {});
+			if (!this.storageStopped) {
+				await this.titles.close();
+				await this.cancel();
+				await Promise.allSettled(this.operations);
+				await this.workerFinished;
+				await this.saveQueue;
+				await this.store.close();
+				this.storageStopped = true;
+			}
+			return;
+		}
 		await this.titles.close();
 		await this.cancel();
 		await Promise.allSettled(this.operations);
+		await this.workerFinished;
 		await this.saveQueue;
+		await this.store.close();
 	}
 }

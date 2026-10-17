@@ -14,23 +14,93 @@ export function text(value: unknown, max = 12000): string {
 		throw new Error("Invalid text");
 	return value.trim();
 }
+export function parseAppJson(value: string): any {
+	try {
+		return JSON.parse(value);
+	} catch {
+		throw new Error(
+			"Invalid App JSON; keep storage unchanged and inspect offline",
+		);
+	}
+}
+export async function assertAppProfileRoot(root: string, home = os.homedir()) {
+	const resolveMissing = async (file: string): Promise<string> => {
+		try {
+			return await fs.realpath(file);
+		} catch (error: any) {
+			if (error.code !== "ENOENT") throw error;
+			const parent = path.dirname(file);
+			if (parent === file) return file;
+			return path.join(await resolveMissing(parent), path.basename(file));
+		}
+	};
+	if (!path.isAbsolute(root))
+		throw new Error("App profile requires an absolute dedicated directory");
+	const canonical = await resolveMissing(root);
+	const canonicalHome = await resolveMissing(home);
+	const shared = await resolveMissing(path.join(home, ".orbit"));
+	if (
+		[path.parse(canonical).root, canonicalHome, shared].includes(canonical) ||
+		canonical.startsWith(shared + path.sep)
+	)
+		throw new Error(
+			"Shared CLI/GUI, home and system roots cannot be App profiles",
+		);
+}
 export class Store {
 	state: Snapshot = { projects: [], schedules: [] };
 	private writes = Promise.resolve();
+	private closed = false;
+	private preferences: Record<string, unknown> = {};
+	static stateFile(root: string) {
+		return path.join(root, "registry", "state.json");
+	}
 	constructor(
 		readonly root: string,
 		private readonly names: CoreNames = new ContainerCoreNames(root),
 	) {}
-	async init() {
-		await fs.mkdir(this.root, { recursive: true, mode: 0o700 });
+	async init(readOnly = false) {
+		await assertAppProfileRoot(this.root);
+		if (!readOnly) await fs.mkdir(this.root, { recursive: true, mode: 0o700 });
+		for (const file of [
+			Store.stateFile(this.root),
+			path.join(this.root, "state.json"),
+			path.join(this.root, "settings.json"),
+			path.join(this.root, "cache", "health.json"),
+		])
+			await this.checkOwnedFile(file);
 		try {
-			this.state = JSON.parse(
-				await fs.readFile(path.join(this.root, "state.json"), "utf8"),
+			this.state = parseAppJson(
+				await fs.readFile(Store.stateFile(this.root), "utf8").catch((error) => {
+					if (error.code !== "ENOENT") throw error;
+					return fs.readFile(path.join(this.root, "state.json"), "utf8");
+				}),
 			);
 		} catch (e: any) {
 			if (e.code !== "ENOENT") throw e;
 		}
 
+		try {
+			this.preferences = parseAppJson(
+				await fs.readFile(path.join(this.root, "settings.json"), "utf8"),
+			);
+		} catch (error: any) {
+			if (error.code !== "ENOENT") throw error;
+		}
+		if (Object.hasOwn(this.preferences, "appearance"))
+			this.state.appearance = this.preferences
+				.appearance as Snapshot["appearance"];
+		try {
+			this.state.health = parseAppJson(
+				await fs.readFile(path.join(this.root, "cache", "health.json"), "utf8"),
+			);
+		} catch (error: any) {
+			if (error.code !== "ENOENT") throw error;
+		}
+		this.state.appearance ??= "system";
+		if (readOnly) return;
+		if (!["system", "light", "dark"].includes(this.state.appearance))
+			throw new Error("Invalid saved appearance");
 		if (this.state.projects.length && this.state.namesVersion !== 1)
 			throw new Error(
 				`Legacy App names are unsupported at ${this.root}. Existing data was not changed. Use a fresh data directory after explicitly handling the old data.`,
@@ -52,6 +122,28 @@ export class Store {
 		this.state.executions ??= [];
 		this.restoreRuntimeState();
 
+		await fs.mkdir(path.dirname(Store.stateFile(this.root)), {
+			recursive: true,
+			mode: 0o700,
+		});
+		// Move the authoritative legacy registry, never copy or back it up.
+		try {
+			await fs.access(path.join(this.root, "state.json"));
+			try {
+				await fs.access(Store.stateFile(this.root));
+				throw new Error(
+					"Both legacy and current App registries exist; inspect before continuing",
+				);
+			} catch (error: any) {
+				if (error.code !== "ENOENT") throw error;
+			}
+			await fs.rename(
+				path.join(this.root, "state.json"),
+				Store.stateFile(this.root),
+			);
+		} catch (error: any) {
+			if (error.code !== "ENOENT") throw error;
+		}
 		await this.save();
 	}
 	private restoreRuntimeState() {
@@ -89,8 +181,23 @@ export class Store {
 	}
 
 	async save() {
+		if (this.closed)
+			throw new Error("App storage is closed for initialization");
+		const preferences = JSON.stringify({
+			...this.preferences,
+			appearance: this.state.appearance ?? "system",
+		});
+		const health = this.state.health
+			? JSON.stringify(this.state.health)
+			: undefined;
+		const {
+			maintenance: _maintenance,
+			appearance: _appearance,
+			health: _health,
+			...savedData
+		} = this.state;
 		const data = JSON.stringify({
-			...this.state,
+			...savedData,
 			namesVersion: 1,
 			projects: this.state.projects.map((project) => {
 				const {
@@ -109,11 +216,60 @@ export class Store {
 			}),
 		});
 		this.writes = this.writes.then(async () => {
-			const file = path.join(this.root, "state.json");
-			await fs.writeFile(`${file}.tmp`, data, { mode: 0o600 });
-			await fs.rename(`${file}.tmp`, file);
+			const file = Store.stateFile(this.root);
+			await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+			await this.writeOwnedFile(
+				path.join(this.root, "settings.json"),
+				preferences,
+			);
+			if (health) {
+				await fs.mkdir(path.join(this.root, "cache"), {
+					recursive: true,
+					mode: 0o700,
+				});
+				await this.writeOwnedFile(
+					path.join(this.root, "cache", "health.json"),
+					health,
+				);
+			}
+			await this.writeOwnedFile(file, data);
 		});
 		await this.writes;
+	}
+	private async checkOwnedFile(file: string) {
+		try {
+			const parent = await fs.lstat(path.dirname(file));
+			if (parent.isSymbolicLink() || !parent.isDirectory())
+				throw new Error("Unsafe App persistence directory");
+		} catch (error: any) {
+			if (error.code !== "ENOENT") throw error;
+		}
+		try {
+			const target = await fs.lstat(file);
+			if (target.isSymbolicLink() || !target.isFile() || target.nlink !== 1)
+				throw new Error("Unsafe App persistence target");
+		} catch (error: any) {
+			if (error.code !== "ENOENT") throw error;
+		}
+	}
+	private async writeOwnedFile(file: string, data: string) {
+		const parent = await fs.lstat(path.dirname(file));
+		if (parent.isSymbolicLink() || !parent.isDirectory())
+			throw new Error("Unsafe App persistence directory");
+		try {
+			const target = await fs.lstat(file);
+			if (target.isSymbolicLink() || !target.isFile() || target.nlink !== 1)
+				throw new Error("Unsafe App persistence target");
+		} catch (error: any) {
+			if (error.code !== "ENOENT") throw error;
+		}
+		await fs.writeFile(`${file}.tmp`, data, { mode: 0o600, flag: "wx" });
+		await fs.rename(`${file}.tmp`, file);
+	}
+	async close() {
+		await this.writes;
+		await this.names.close?.();
+		this.closed = true;
 	}
 	async refreshNames() {
 		// Serialize readers: opening one container per project concurrently is unbounded.

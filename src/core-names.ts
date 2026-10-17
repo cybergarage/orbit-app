@@ -4,11 +4,19 @@ import path from "node:path";
 import { dockerArgs, dockerPath } from "./worker";
 export interface CoreNames {
 	call(core: string, request: Record<string, unknown>): Promise<any>;
+	close?(): Promise<void>;
 }
 export class ContainerCoreNames implements CoreNames {
 	private operations: Promise<unknown> = Promise.resolve();
+	private closed = false;
+	async close() {
+		await this.operations;
+		this.closed = true;
+	}
 	constructor(private readonly root: string) {}
 	call(core: string, request: Record<string, unknown>) {
+		if (this.closed)
+			return Promise.reject(new Error("Core metadata storage is closed"));
 		const operation = this.operations.then(() =>
 			this.performCall(core, request),
 		);

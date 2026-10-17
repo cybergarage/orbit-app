@@ -66,6 +66,7 @@ export interface Execution {
 	events: EventRecord[];
 }
 export interface Snapshot {
+	maintenance?: { error?: string; complete: boolean };
 	submissionSequence?: number;
 	appearance?: "system" | "light" | "dark";
 	namesVersion?: number;

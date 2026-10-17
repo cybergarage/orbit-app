@@ -19,8 +19,9 @@ test.afterEach(async () => {
 async function fixture() {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-approved-ui-"));
 	testRoots.push(root);
+	await fs.mkdir(path.join(root, "registry"));
 	const launch = async () => {
-		const stateFile = path.join(root, "state.json");
+		const stateFile = path.join(root, "registry", "state.json");
 		const seed = await fs
 			.readFile(stateFile, "utf8")
 			.then(JSON.parse)
@@ -228,7 +229,7 @@ test("project create/edit cancel, session rename/move, outside/ESC dismissal and
 	await app.close();
 	expect(
 		JSON.parse(
-			await fs.readFile(path.join(root, "state.json"), "utf8"),
+			await fs.readFile(path.join(root, "registry", "state.json"), "utf8"),
 		).projects.find((p: any) => p.instructions === "Project guidance")
 			.instructions,
 	).toBe("Project guidance");
@@ -241,7 +242,7 @@ test("persisted execution detail, interrupted state and disabled session menu us
 		scheduleId = randomUUID(),
 		runId = randomUUID();
 	await fs.writeFile(
-		path.join(root, "state.json"),
+		path.join(root, "registry", "state.json"),
 		JSON.stringify({
 			projects: [
 				{
@@ -355,7 +356,7 @@ test("real scheduler admission failure is durable and shown without an invented 
 	const p = randomUUID(),
 		s = randomUUID();
 	await fs.writeFile(
-		path.join(root, "state.json"),
+		path.join(root, "registry", "state.json"),
 		JSON.stringify({
 			projects: [
 				{
@@ -408,7 +409,7 @@ test("real scheduler admission failure is durable and shown without an invented 
 		await app.close();
 	}
 	const saved = JSON.parse(
-		await fs.readFile(path.join(root, "state.json"), "utf8"),
+		await fs.readFile(path.join(root, "registry", "state.json"), "utf8"),
 	);
 	expect(saved.executions[0].status).toBe("failed");
 	expect(saved.executions[0].endedAt).toBeTruthy();
@@ -420,7 +421,7 @@ test("approved conversation, Debug overlay, project rename and real failed Retry
 		s = randomUUID();
 	const at = new Date().toISOString();
 	await fs.writeFile(
-		path.join(root, "state.json"),
+		path.join(root, "registry", "state.json"),
 		JSON.stringify({
 			projects: [
 				{
@@ -472,7 +473,7 @@ test("approved conversation, Debug overlay, project rename and real failed Retry
 		}),
 	);
 	const saved = JSON.parse(
-		await fs.readFile(path.join(root, "state.json"), "utf8"),
+		await fs.readFile(path.join(root, "registry", "state.json"), "utf8"),
 	);
 	const completed = structuredClone(saved.projects[0].sessions[0]);
 	completed.id = randomUUID();
@@ -482,7 +483,10 @@ test("approved conversation, Debug overlay, project rename and real failed Retry
 		["submission", "result"].includes(event.type),
 	);
 	saved.projects[0].sessions.push(completed);
-	await fs.writeFile(path.join(root, "state.json"), JSON.stringify(saved));
+	await fs.writeFile(
+		path.join(root, "registry", "state.json"),
+		JSON.stringify(saved),
+	);
 	let app = await launch();
 	let page = await app.firstWindow();
 	await app.evaluate(({ BrowserWindow }) =>
@@ -709,7 +713,7 @@ test("core revision conflict keeps the editor input and authoritative title thro
 		page.getByRole("heading", { name: "External core title", exact: true }),
 	).toBeVisible();
 	const saved = JSON.parse(
-		await fs.readFile(path.join(root, "state.json"), "utf8"),
+		await fs.readFile(path.join(root, "registry", "state.json"), "utf8"),
 	);
 	expect(saved.projects[0].name).toBeUndefined();
 	expect(saved.projects[0].sessions[0].name).toBeUndefined();

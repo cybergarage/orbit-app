@@ -960,7 +960,7 @@ test("core-only names enforce revisions, replay, missing sessions and membership
 	);
 	assert.equal(attempts.filter((item) => item.status === "rejected").length, 1);
 	const saved = JSON.parse(
-		await fs.readFile(path.join(root, "state.json"), "utf8"),
+		await fs.readFile(path.join(root, "registry", "state.json"), "utf8"),
 	);
 	assert.equal("name" in saved.projects[0], false);
 	assert.equal("name" in saved.projects[0].sessions[0], false);

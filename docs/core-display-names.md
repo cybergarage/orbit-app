@@ -1,6 +1,6 @@
 # Core-backed display names
 
-Orbit App pins the published `@cybergarage/orbit` **0.9.2** package and its npm integrity in `worker/package-lock.json`. The single development image tag is `orbit-app-worker:core-0.9.2`; builds reuse that tag, never replace the preceding image tag, and runtime uses `--pull=never`. Neither a neighboring Orbit checkout nor an unpublished source artifact is used.
+Orbit App pins the published `@cybergarage/orbit` **0.9.3** package and its npm integrity in `worker/package-lock.json`. The single development image tag is `orbit-app-worker:core-0.9.3`; builds reuse that tag, never replace the preceding image tag, and runtime uses `--pull=never`. Neither a neighboring Orbit checkout nor an unpublished source artifact is used.
 
 ## Ownership and storage
 
@@ -12,7 +12,7 @@ Project IDs map one-to-one to `ProjectService.create` operation IDs. The global 
 
 App membership remains in its registry; adopting the core membership/reservation model is not part of this change. Moving a Chat preserves its Session ID, original core repository and title, while changing its App project membership and linked future schedules. It does not copy or rewrite transcripts. Existing execution `projectName` values are historical snapshots, not a fallback source for current names.
 
-App snapshots contain names read from core. Current Project/Session names and revisions are omitted from `state.json`; no legacy name fallback or migration exists. Startup requires `namesVersion: 1` for nonempty registries. A preceding registry fails before normalization or saving and reports its existing data directory. No old data is removed, copied, renamed or reset automatically. To use the new format, the user must explicitly decide how to handle the old data outside this implementation. Normal app storage paths are not silently switched.
+App snapshots contain names read from core. Current Project/Session names and revisions are omitted from `registry/state.json`; no legacy name fallback or migration exists. Startup requires `namesVersion: 1` for nonempty registries. A preceding registry fails before normalization or saving and reports its existing data directory. No old data is removed, copied, renamed or reset automatically. To use the new format, the user must explicitly decide how to handle the old data outside this implementation. Normal app storage paths are not silently switched.
 
 ## Concurrency and errors
 

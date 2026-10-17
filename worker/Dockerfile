@@ -2,7 +2,7 @@ FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddf
 WORKDIR /opt/worker
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY entry.mjs policy.mjs names.mjs ./
+COPY entry.mjs policy.mjs names.mjs maintenance.mjs ./
 ENV HOME=/tmp/worker-home
 USER node
 WORKDIR /workspace

@@ -1,3 +1,4 @@
+import { InitializationSettings } from "./initialization-settings";
 import { orderedChats } from "./chat-order";
 import { ScheduleEditor } from "./schedule-editor";
 import { describeRepeat, scheduledTime } from "./scheduling";
@@ -614,7 +615,7 @@ function App() {
 						[
 							"Worker image",
 							state.health?.image,
-							"orbit-app-worker:core-0.9.2 · Orbit 0.9.2. Image readiness does not mean a worker is currently running.",
+							"orbit-app-worker:core-0.9.3 · Orbit 0.9.3. Image readiness does not mean a worker is currently running.",
 						],
 					].map(([label, ready, detail]) => (
 						<div className="card" key={String(label)}>
@@ -1134,6 +1135,13 @@ function App() {
 			)
 		);
 	}
+	if (state.maintenance)
+		return (
+			<main>
+				<InitializationSettings />
+			</main>
+		);
+
 	return (
 		<div className="app">
 			<nav className="dock" aria-label="Primary navigation">
@@ -1194,6 +1202,18 @@ function App() {
 							}}
 						>
 							Status
+						</button>
+						<button
+							type="button"
+							className={
+								settingsCategory === "initialization" ? "selected" : ""
+							}
+							onClick={() => {
+								setView("settings");
+								setSettingsCategory("initialization");
+							}}
+						>
+							Initialization
 						</button>
 					</>
 				) : view === "scheduled" || view === "schedule" ? (
@@ -1376,6 +1396,9 @@ function App() {
 					</div>
 				)}
 				{!dialog && renderProjectEditor()}
+				{!dialog &&
+					view === "settings" &&
+					settingsCategory === "initialization" && <InitializationSettings />}
 				{!dialog &&
 					view === "settings" &&
 					settingsCategory === "appearance" && (

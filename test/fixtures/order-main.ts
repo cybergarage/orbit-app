@@ -4,10 +4,11 @@ import fs from "node:fs/promises";
 import { orderFixture, seedOrderFixture } from "./order";
 
 async function start() {
-	await app.whenReady();
 	const root = process.env.ORBIT_ORDER_ROOT;
 	const dist = process.env.ORBIT_ORDER_DIST;
 	if (!root || !dist) throw new Error("Missing ordering fixture paths");
+	app.setPath("userData", path.join(root, "electron"));
+	await app.whenReady();
 	const fixture = orderFixture(root, (state) =>
 		window.webContents.send("orbit:state", state),
 	);

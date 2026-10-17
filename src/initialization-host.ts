@@ -51,7 +51,7 @@ async function exists(file: string) {
 const appleVmExecutable =
 	"/System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine";
 async function verifiedReadOnlyVm(pid: string) {
-	if (process.platform !== "darwin" || !/^[0-9]+$/.test(pid)) return false;
+	if (process.platform !== "darwin" || !/^\d+$/.test(pid)) return false;
 	try {
 		const executable = (
 			await command("/bin/ps", ["-p", pid, "-o", "comm="])
@@ -103,13 +103,13 @@ async function assertNoWritableHandles(target: string) {
 	if (!info) return;
 	const output = await new Promise<string>((resolve, reject) => {
 		execFile(
-			"lsof",
+			process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof",
 			info.isDirectory() ? ["-Ffat", "+D", target] : ["-Ffat", "--", target],
 			{ timeout: 15000, maxBuffer: 128000 },
 			(error, stdout, stderr) => {
 				if (stderr.trim() || (error && error.code !== 1))
 					return reject(
-						new Error(`Cannot verify external storage handles: ${target}`),
+						new Error(`Cannot verify external storage handles: ${target} (${error?.code ?? "stderr"}; ${stderr.trim().slice(0, 1500)})`),
 					);
 				resolve(stdout);
 			},

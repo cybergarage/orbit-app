@@ -6,24 +6,34 @@ export interface CoreNames {
 	call(core: string, request: Record<string, unknown>): Promise<any>;
 	close?(): Promise<void>;
 }
+// All ephemeral metadata helpers for one canonical App profile share one lane.
+// Per-instance queues let Store and background knowledge open the same bind-mounted
+// SQLite catalog concurrently. This is coordination, never a second storage DB.
+const profileOperations = new Map<string, Promise<unknown>>();
 export class ContainerCoreNames implements CoreNames {
 	private operations: Promise<unknown> = Promise.resolve();
 	private closed = false;
 	async close() {
-		await this.operations;
 		this.closed = true;
+		await this.operations;
 	}
 	constructor(private readonly root: string) {}
 	call(core: string, request: Record<string, unknown>) {
 		if (this.closed)
 			return Promise.reject(new Error("Core metadata storage is closed"));
-		const operation = this.operations.then(() =>
-			this.performCall(core, request),
+		const key = path.resolve(this.root);
+		const operation = (profileOperations.get(key) ?? Promise.resolve()).then(
+			() => this.performCall(core, request),
 		);
-		this.operations = operation.catch(() => {});
+		const settled = operation.catch(() => {});
+		profileOperations.set(key, settled);
+		this.operations = settled;
+		void settled.then(() => {
+			if (profileOperations.get(key) === settled) profileOperations.delete(key);
+		});
 		return operation;
 	}
-	private async performCall(core: string, request: Record<string, unknown>) {
+	protected async performCall(core: string, request: Record<string, unknown>) {
 		const catalog = path.join(this.root, "catalog");
 		if (request.command !== "create-project") {
 			await fs.access(path.join(catalog, "projects.sqlite"));

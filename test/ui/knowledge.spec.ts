@@ -38,6 +38,7 @@ test("Project knowledge UI learns A, reuses it in B, edits, stops and deletes th
 			},
 		});
 	let app = await launch();
+	let failed = false;
 	try {
 		let page = await app.firstWindow();
 		const ids = await page.evaluate(async () => {
@@ -282,6 +283,8 @@ test("Project knowledge UI learns A, reuses it in B, edits, stops and deletes th
 			fullPage: true,
 		});
 	} catch (error) {
+		failed = true;
+		console.log("Synthetic failure profile retained in place", root);
 		console.log(
 			"Synthetic metadata failure trace",
 			JSON.stringify(
@@ -293,6 +296,6 @@ test("Project knowledge UI learns A, reuses it in B, edits, stops and deletes th
 		throw error;
 	} finally {
 		await app.close();
-		await fs.rm(root, { recursive: true, force: true });
+		if (!failed) await fs.rm(root, { recursive: true, force: true });
 	}
 });

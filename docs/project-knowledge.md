@@ -239,3 +239,20 @@ source verification with an intentionally empty executable-search PATH passed.
 Worker SQLite `select1` and the three audited Core module hashes matched after
 explicit binary installation. Runner timing and final gates are checked on the
 new exact PR head; local timing is not proof of Linux completion.
+
+A subsequent full local UI run reproduced a different concrete failure:
+`Corrupt project catalog` immediately after the second Project was created.
+The bounded trace showed Store create-session and knowledge queries starting
+through different metadata clients at the same time. Each client had its own
+queue, so host coordination did not actually cover the shared catalog. App now
+shares one metadata lane per validated profile across these clients; separate
+profiles remain independent, failed calls do not strand the lane, and closing one
+client rejects new work without closing another. No storage paths, writer claims,
+Core code, package bytes or catalog checks are bypassed. A deterministic two-client
+ordering/failure/close regression and the previously failing actual UI path pass.
+This fixes demonstrated helper overlap; it does not establish the physical cause
+of the corruption message or identify the earlier Project-not-found error.
+Future failed synthetic UI profiles are retained in place for diagnosis; no copy
+or user-data backup is created. Successful fixture profiles are still removed.
+Final complete suites must include this additional coordination change (83 unit
+cases expected); earlier82-case success predates it.

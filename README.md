@@ -3,9 +3,7 @@
 
 # Orbit App
 
-Developer desktop workspace powered by Orbit.
-
-Related projects: [Orbit](https://github.com/cybergarage/orbit) · [Orbit Nest](https://github.com/cybergarage/orbit-nest).
+Developer desktop workspace powered by [Orbit](https://github.com/cybergarage/orbit).
 
 A local Electron desktop prototype for local agent work. Create a project and session, send a task to native Ollama, and review writes or commands before Orbit executes them in a network-disabled container. No cloud model fallback.
 

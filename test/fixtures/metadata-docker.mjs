@@ -40,6 +40,12 @@ if (verb === "writer") {
 			state.writerPid = writer.pid;
 			write(state);
 			if (state.mode === "exit") process.exit(17);
+			if (state.mode === "structured-error") {
+				console.log(
+					JSON.stringify({ error: "Project name changed; revision conflict" }),
+				);
+				process.exit(1);
+			}
 			if (state.mode === "output") process.stdout.write("x".repeat(4096));
 			setInterval(() => {}, 1000);
 		}

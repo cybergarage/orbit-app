@@ -89,7 +89,7 @@ test("metadata timeout holds the shared lane and shutdown until the surviving he
 	}
 });
 
-for (const mode of ["output", "exit"]) {
+for (const mode of ["output", "exit", "structured-error"]) {
 	test(`metadata ${mode} failure stops the independent writer before another request`, async () => {
 		const f = await fixture(mode);
 		try {
@@ -99,7 +99,11 @@ for (const mode of ["output", "exit"]) {
 			});
 			await assert.rejects(
 				client.call(f.core, { command: "create-project" }),
-				mode === "output" ? /output limit/ : /exit 17/,
+				mode === "output"
+					? /output limit/
+					: mode === "exit"
+						? /exit 17/
+						: /changed; revision conflict/,
 			);
 			assert.equal((await f.read()).writerAliveAtRemove, true);
 			assert.equal((await f.read()).exists, false);

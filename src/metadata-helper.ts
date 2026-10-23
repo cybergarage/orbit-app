@@ -244,13 +244,21 @@ export async function runMetadataHelper(
 				stderr = (stderr + part).slice(-2000);
 			});
 			child.once("error", (error) => finish(error));
-			child.once("close", (code) =>
-				finish(
-					code === 0
-						? undefined
-						: new Error(stderr || `Metadata CLI exit ${code}`),
-				),
-			);
+			child.once("close", (code) => {
+				if (code === 0) {
+					finish();
+					return;
+				}
+				let detail = stderr;
+				try {
+					const reply = JSON.parse(output);
+					if (typeof reply.error === "string")
+						detail = reply.error.slice(-2000);
+				} catch {
+					/* Abnormal/unstructured exits still require owned cleanup. */
+				}
+				finish(new Error(detail || `Metadata CLI exit ${code}`));
+			});
 			child.stdin.on("error", () => {});
 			child.stdin.end(input);
 		});

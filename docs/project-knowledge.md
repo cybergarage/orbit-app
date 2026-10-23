@@ -303,3 +303,11 @@ reduction, all12 assertions, serial execution and each helper's30s bound. This i
 based on measured finite workload plus explicit create/stop verification, not an
 unexplained stalled assertion; stage errors still fail immediately. The existing
 25-minute overall CI budget is unchanged.
+
+Final full validation caught one protocol regression: nonzero helper exits were
+replaced by a generic CLI error, hiding Core revision-conflict details. Structured
+Core error replies are now preserved after the same required owned-container
+cleanup; unstructured exits remain bounded generic errors. The exact failed real
+revision/replay/membership test and7 coordination/lifecycle regressions pass.
+The previous87/88 full result is retained as failure evidence, not reported as a
+successful final run; full89-case and full UI validation follow this correction.

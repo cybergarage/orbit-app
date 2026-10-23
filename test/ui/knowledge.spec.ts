@@ -121,9 +121,15 @@ test("Project knowledge UI learns A, reuses it in B, edits, stops and deletes th
 		await page.getByLabel("Lifetime input-token limit").fill("8192");
 		await page.getByLabel("Lifetime output-token limit").fill("2048");
 		await page.getByLabel("Lifetime call limit").fill("2");
-		await page
-			.getByRole("button", { name: "Apply token limit", exact: true })
-			.click();
+		const applyLimits = page.getByRole("button", {
+			name: "Apply token limit",
+			exact: true,
+		});
+		await applyLimits.click();
+		// A Docker-backed mutation is complete only when action() finishes its
+		// persisted write and refresh. Avoid racing a default 5s DOM poll against it.
+		await expect(applyLimits).toBeDisabled();
+		await expect(applyLimits).toBeEnabled({ timeout: 30000 });
 		await expect
 			.poll(() =>
 				page.evaluate(

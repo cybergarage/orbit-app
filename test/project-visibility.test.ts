@@ -7,7 +7,9 @@ import { Supervisor } from "../src/supervisor";
 import { ContainerCoreNames } from "../src/core-names";
 
 test("new Project registry/catalog visibility survives background idle reconciliation and immediate configuration", {
-	timeout: 120000,
+	// Runner stage evidence reaches the final Project readback at122.2s.
+	// Keep all12 Projects and per-helper30s limits; allow bounded total work.
+	timeout: 180000,
 }, async (t) => {
 	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "orbit-project-visibility-"),

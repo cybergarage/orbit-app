@@ -135,14 +135,27 @@ for (const mode of ["settings", "data", "all"] as const)
 			).toHaveCount(0);
 			// Verify the real restart IPC invokes relaunch/quit without spawning an unmanaged test App.
 			if (mode === "settings") {
-				await app.evaluate(({ app: host }) => {
-					host.relaunch = () => {};
-				});
+				const relaunchEvidence = path.join(f.base, "relaunch-requested");
+				await app.evaluate(({ app: host }, file) => {
+					host.relaunch = () =>
+						process.getBuiltinModule("fs").writeFileSync(file, "relaunch");
+				}, relaunchEvidence);
 				const closed = app.waitForEvent("close");
-				await page
+				// Restart intentionally destroys this renderer. Wait for the close
+				// event, accepting a click rejection only when that event confirms it.
+				const click = page
 					.getByRole("button", { name: "Restart App", exact: true })
-					.click();
-				await closed;
+					.click()
+					.catch((error) => {
+						if (
+							!String(error).includes(
+								"Target page, context or browser has been closed",
+							)
+						)
+							throw error;
+					});
+				await Promise.all([closed, click]);
+				expect(await fs.readFile(relaunchEvidence, "utf8")).toBe("relaunch");
 			} else await app.close();
 			app = await f.launch();
 			page = await app.firstWindow();

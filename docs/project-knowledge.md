@@ -256,3 +256,50 @@ Future failed synthetic UI profiles are retained in place for diagnosis; no copy
 or user-data backup is created. Successful fixture profiles are still removed.
 Final complete suites must include this additional coordination change (83 unit
 cases expected); earlier82-case success predates it.
+
+### Metadata helper lifetime and recovery
+
+The follow-up review identified a P1: killing `docker run`'s CLI did not prove the
+container stopped, so timeout/output-limit rejection could release the shared
+lane while a catalog writer survived. This is addressed independently of the
+unexplained corruption/UI errors; no causal identity is claimed.
+
+The host now creates a stopped container first, synchronously records its exact
+ID/name, profile/core paths, process owner and per-helper ownership label in a
+private `.metadata-helper.json`, then starts it attached. Atomic metadata-file
+updates are lifecycle evidence, not copies/backups of user data. An interrupted
+create cannot start a writer before the ID is known. On timeout, output overflow,
+CLI failure or malformed output, the lane remains held while the host verifies
+that exact container's labels, removes it and confirms absence. Uncertain cleanup
+retains the record, blocks every metadata client and makes shutdown/initialization
+fail closed. No later catalog operation is admitted merely because the CLI ended.
+A normal result is emitted by names.mjs only after `catalog.close()` completes.
+
+After stopping the App, recover an owned helper explicitly from this checkout:
+
+```sh
+npm run metadata:recover -- /exact/App/profile/path
+```
+
+Recovery validates the private record, refuses a still-live foreign process owner,
+and verifies exact container ID/name/profile/core/ownership labels before removal
+and absence confirmation. Unknown ownership or a malformed record is refused;
+preserve the evidence for operator review rather than deleting it to bypass the
+fence. A restart also refuses pending helper evidence until recovery completes.
+Core repositories, registered source paths and existing user data are not altered.
+
+Tests exercise independent real CLI/writer processes for timeout/output overflow/
+CLI exit, shutdown waiting, queued-request fencing, stop refusal, ownership changes,
+and recovery. A real Docker helper remains running after CLI termination; the
+new-process fence and durable-ID recovery are tested against that container.
+The unrelated Linux UI failures are synchronized to actual budget-action completion
+and explicit relaunch evidence, not a five-second DOM poll or an assumption that
+click resolves before the renderer closes.
+
+Runner stage logs on0e00171 show monotonic progress through all12 Projects: final
+create107.5s, chat create110.2s, rename115.5s, configure118.2s and readback122.2s.
+Therefore the visibility fixture's total bound is now180s, preserving the40-admission
+reduction, all12 assertions, serial execution and each helper's30s bound. This is
+based on measured finite workload plus explicit create/stop verification, not an
+unexplained stalled assertion; stage errors still fail immediately. The existing
+25-minute overall CI budget is unchanged.

@@ -30,7 +30,7 @@ test("Project knowledge UI learns A, reuses it in B, edits, stops and deletes th
 	const launch = () =>
 		electron.launch({
 			timeout: 20000,
-			args: [entry],
+			args: process.env.CI ? [entry, "--no-sandbox"] : [entry],
 			env: {
 				...process.env,
 				ORBIT_KNOWLEDGE_ROOT: root,

@@ -15,6 +15,7 @@
     "test": "tsx --test --test-concurrency=1 test/*.test.ts worker/*.test.mjs",
     "test:ui": "npm run build && playwright test",
     "test:live": "tsx scripts/live.ts",
+    "core:prepare": "node scripts/prepare-local-core.mjs",
     "worker:build": "docker build -t orbit-app-worker:project-memory-local worker",
     "package": "npm run build && node scripts/package.mjs"
   },

@@ -36,7 +36,12 @@ jobs:
           sudo setcap cap_dac_read_search,cap_sys_ptrace+ep /usr/bin/lsof
       - name: Verify the source pin and audited vendored artifact before installation
         run: node scripts/prepare-local-core.mjs --verify-source ../orbit
-      - run: npm ci
+      - run: npm ci --ignore-scripts
+      # Run only these lock-pinned binary downloaders, not dependency hooks.
+      - name: Install the pinned Electron binary
+        run: node node_modules/electron/install.js
+      - name: Install the pinned SQLite binary
+        run: cd node_modules/better-sqlite3 && node ../prebuild-install/bin.js
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run worker:build

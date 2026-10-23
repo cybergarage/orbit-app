@@ -128,7 +128,16 @@ export class ProjectKnowledge {
 				for (const [core, sessions] of [...groups].sort(([a], [b]) =>
 					a.localeCompare(b),
 				))
-					leases.push(await this.acquire(core, sessions.sort()));
+					leases.push(
+						await this.acquire(
+							core,
+							// Match Core's locale-independent lock ordering.
+							sessions.toSorted((a, b) => {
+								if (a < b) return -1;
+								return a > b ? 1 : 0;
+							}),
+						),
+					);
 				const captures = new Map(
 					leases.flatMap((lease) =>
 						lease.captures.map(

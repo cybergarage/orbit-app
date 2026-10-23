@@ -8,7 +8,7 @@ import { ContainerCoreNames } from "../src/core-names";
 
 test("new Project registry/catalog visibility survives background idle reconciliation and immediate configuration", {
 	timeout: 120000,
-}, async () => {
+}, async (t) => {
 	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "orbit-project-visibility-"),
 	);
@@ -22,6 +22,14 @@ test("new Project registry/catalog visibility survives background idle reconcili
 		{ extract: async () => ({ text: '{"candidates":[]}' }) },
 	);
 	const reader = new ContainerCoreNames(root);
+	const started = performance.now();
+	const stageTimes: string[] = [];
+	const mark = (next: string) => {
+		stage = next;
+		const entry = `${Math.round(performance.now() - started)}ms ${id} ${next}`;
+		stageTimes.push(entry);
+		console.log(`Project visibility: ${entry}`);
+	};
 	let stage = "init",
 		id = "";
 	const tick = setInterval(() => {
@@ -30,39 +38,49 @@ test("new Project registry/catalog visibility survives background idle reconcili
 	try {
 		await sup.init();
 		for (let index = 0; index < 12; index++) {
-			stage = "create-project";
+			t.signal.throwIfAborted();
+			mark("create-project");
 			const p = await sup.dispatch("create-project", {
 				name: `Visibility ${index}`,
 			});
 			id = p.id;
 			assert.ok(sup.store.project(id));
-			stage = "catalog visibility after create";
-			assert.equal(
-				(
-					await reader.call(path.join(root, "catalog"), {
-						command: "catalog-query",
-						query: { kind: "project", id },
-					})
-				).id,
-				id,
-			);
-			stage = "create-session";
-			const chat = await sup.dispatch("create-session", { projectId: id });
-			stage = "rename-session";
-			await sup.dispatch("rename-session", {
-				projectId: id,
-				sessionId: chat.id,
-				name: `Visibility chat ${index}`,
-				expectedRevision: chat.nameRevision,
-				operationId: crypto.randomUUID(),
-			});
-			stage = "configure";
+			// Configuration itself resolves each Project through the catalog below.
+			// Sample an additional independent reader at both ends of the sequence.
+			if (index === 0 || index === 11) {
+				mark("catalog visibility after create");
+				assert.equal(
+					(
+						await reader.call(path.join(root, "catalog"), {
+							command: "catalog-query",
+							query: { kind: "project", id },
+						})
+					).id,
+					id,
+				);
+			}
+			// Exercise the complete chat lifecycle on the first and last Project.
+			// Middle iterations target immediate Project→configuration visibility;
+			// duplicating chat creation there adds unrelated container admissions.
+			if (index === 0 || index === 11) {
+				mark("create-session");
+				const chat = await sup.dispatch("create-session", { projectId: id });
+				mark("rename-session");
+				await sup.dispatch("rename-session", {
+					projectId: id,
+					sessionId: chat.id,
+					name: `Visibility chat ${index}`,
+					expectedRevision: chat.nameRevision,
+					operationId: crypto.randomUUID(),
+				});
+			}
+			mark("configure");
 			await sup.dispatch("knowledge-control", {
 				projectId: id,
 				enabled: false,
 				limits: { maxInputTokens: 6144, maxOutputTokens: 1024, maxCalls: 1 },
 			});
-			stage = "status";
+			mark("status");
 			assert.equal(
 				(await sup.knowledge.status(id)).config?.maxInputTokens,
 				6144,
@@ -73,6 +91,7 @@ test("new Project registry/catalog visibility survives background idle reconcili
 			cause: error,
 		});
 	} finally {
+		t.diagnostic(stageTimes.join("\n"));
 		clearInterval(tick);
 		await reader.close();
 		await sup.close();

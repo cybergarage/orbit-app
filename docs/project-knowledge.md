@@ -182,8 +182,10 @@ machine paths, session/database files or user data. It is an intentional package
 dependency, not a backup or public release. SHA-256:
 `17bb8964c7df8540c3e10f40331f8f98ddb53e7e2db35a6921f3129eb68e6eb2`.
 
-Source rebuild remains available with `node scripts/prepare-local-core.mjs <path>`
-on an explicitly selected clean checkout. The script refuses revision or artifact
+Source rebuild remains available with `npm run core:prepare -- <path>`
+on an explicitly selected clean macOS/Linux checkout (`/usr/bin/git`). npm supplies
+its absolute CLI path and the script invokes it with the current Node binary; it
+does not search PATH for subprocess executables. The script refuses revision or artifact
 hash changes. The initial Linux/Node22 CI rebuild produced different archive bytes
 than the reviewed M4 artifact; it was not accepted by weakening the hash check.
 Do not assume byte-identical archives across toolchains. Use the included pinned
@@ -196,3 +198,44 @@ reviewed hash and both locks, rebuild the worker and rerun all checks. After a
 separately authorized real Core release, replace both file dependencies with its
 exact real version, regenerate both locks/image and rerun integration/GUI checks
 before making this PR ready. No merge, release or deployment is authorized here.
+
+
+Core PR #19 was merged as `4d880deee0f5d4edbdc831e4ccc17dfb26a91e98`.
+Its source tree matches the pinned source commit above exactly; the included
+artifact and both locks therefore remain unchanged. This is still a vendored
+integration package, not a registry release.
+
+
+### PR CI follow-up
+
+Both initial exact-head Linux runs passed81 of82 unit cases; the additional
+12-Project visibility fixture was cancelled at its unchanged120-second limit.
+A measured M4 run of the old full workload took70.9seconds. Both unit suites use
+`--test-concurrency=1` (and UI uses one worker); this was not parallel fixture
+interference. Each metadata request starts an isolated container. Repeating chat
+creation and rename in all12 Projects added30 lifecycle admissions; independently
+querying catalog identity in all12 added another10 duplicate reader admissions.
+The fixture now retains all12 real create/configure/readback sequences with
+background idle ticks, and independent catalog-reader plus complete chat lifecycle
+checks on the first and last Project. Per-stage timestamps remain in logs, the
+120-second limit is unchanged, and cancellation stops further iterations. This
+changes test workload composition, not a claimed fix for the earlier unreproduced
+Project-not-found error.
+
+Sonar follow-up in app: lock acquisition uses an explicit locale-independent
+comparison matching Core; source verification invokes `/usr/bin/git`, regeneration
+uses the current absolute Node executable plus npm's absolute CLI path, and CI and
+worker installs use `--ignore-scripts`. CI explicitly runs only the pinned Electron and SQLite binary installers;
+the worker explicitly installs the pinned SQLite binary. A local script-disabled
+worker initially lacked that binary and failed the visibility fixture, so the
+explicit installer was added before publication. No quality-gate thresholds or exclusions were changed. Core's
+merged Sonar observations are recorded separately; no post-merge Core changes are
+included here.
+
+The final local follow-up passed10 targeted cases (fault/accounting, package pin,
+visibility). The restructured visibility case took46.3seconds on M4, versus70.9
+for the old workload; the intermediate version took51.2. lint/typecheck and
+source verification with an intentionally empty executable-search PATH passed.
+Worker SQLite `select1` and the three audited Core module hashes matched after
+explicit binary installation. Runner timing and final gates are checked on the
+new exact PR head; local timing is not proof of Linux completion.

@@ -126,7 +126,7 @@ test("Core GUI automatically learns A and supplies B without manual note selecti
 		outfile: entry,
 	});
 	const app = await electron.launch({
-		args: [entry],
+		args: process.env.CI ? [entry, "--no-sandbox"] : [entry],
 		env: {
 			...process.env,
 			ORBIT_CORE_GUI_URL: server.url,

@@ -14,11 +14,11 @@ if (
 	!fs.existsSync(path.join(core, "src/core/projects/source-lease.ts"))
 )
 	throw new Error("Select the separate Project knowledge Core checkout");
-const revision = spawnSync("git", ["rev-parse", "HEAD"], {
+const revision = spawnSync("/usr/bin/git", ["rev-parse", "HEAD"], {
 	cwd: core,
 	encoding: "utf8",
 });
-const changes = spawnSync("git", ["status", "--porcelain"], {
+const changes = spawnSync("/usr/bin/git", ["status", "--porcelain"], {
 	cwd: core,
 	encoding: "utf8",
 });
@@ -43,7 +43,17 @@ if (verifyOnly) {
 	process.exit(0);
 }
 const run = (cwd, args) => {
-	const r = spawnSync("npm", args, { cwd, stdio: "inherit" });
+	// npm supplies its absolute CLI path when this script runs through core:prepare.
+	// Execute it with this Node binary, never search a caller-controlled PATH.
+	const cli = process.env.npm_execpath;
+	if (!cli || !path.isAbsolute(cli) || !fs.statSync(cli).isFile())
+		throw new Error(
+			"Run regeneration through npm run core:prepare -- <Core checkout>",
+		);
+	const r = spawnSync(process.execPath, [cli, ...args], {
+		cwd,
+		stdio: "inherit",
+	});
 	if (r.status !== 0) throw new Error(`npm ${args[0]} failed`);
 };
 run(core, ["run", "build"]);

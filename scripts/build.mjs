@@ -6,7 +6,7 @@ await build({
 	bundle: true,
 	platform: "node",
 	format: "cjs",
-	external: ["electron"],
+	external: ["electron", "@cybergarage/orbit", "@cybergarage/orbit/*"],
 	outfile: "dist/main.cjs",
 });
 await build({

@@ -33,6 +33,8 @@ export function orderFixture(root: string, changed: (s: Snapshot) => void) {
 				confirmGone: async () => {},
 			}) as unknown as Worker,
 	);
+	sup.knowledge.prepare = async () => undefined;
+    sup.knowledge.kick = () => {};
 	sup.store.refreshNames = async () => {
 		for (const p of sup.store.state.projects) {
 			p.name = p.unassigned ? "Chats" : "Project";

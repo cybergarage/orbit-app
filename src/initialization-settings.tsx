@@ -13,6 +13,7 @@ export function InitializationSettings() {
 	const [includeSettings, setIncludeSettings] = useState(false);
 	const [stopped, setStopped] = useState(false);
 	const [busy, setBusy] = useState(false);
+	const [stopping, setStopping] = useState(false);
 	const [complete, setComplete] = useState(false);
 	const [confirmation, setConfirmation] = useState("");
 	const [offline, setOffline] = useState(false);
@@ -32,6 +33,7 @@ export function InitializationSettings() {
 	}, []);
 	async function review(selected: InitializationMode, stop: boolean) {
 		setBusy(true);
+		setStopping(stop);
 		setError("");
 		setPlan(undefined);
 		setConfirmation("");
@@ -48,6 +50,7 @@ export function InitializationSettings() {
 		} catch (e) {
 			setError(String(e));
 		} finally {
+			setStopping(false);
 			setBusy(false);
 		}
 	}
@@ -105,9 +108,11 @@ export function InitializationSettings() {
 			) : (
 				<>
 					<p role="status">
-						{stopped
-							? "App writers remain stopped. Review remaining targets or close the App; incomplete initialization stays in maintenance after restart."
-							: "Review targets first. A final plan is created after verified writer shutdown."}
+						{stopping
+							? "Stopping App writers and verifying final targets…"
+							: stopped
+								? "App writers remain stopped. Review remaining targets or close the App; incomplete initialization stays in maintenance after restart."
+								: "Review targets first. A final plan is created after verified writer shutdown."}
 					</p>
 					<label>
 						<input

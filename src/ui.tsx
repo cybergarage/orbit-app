@@ -1,3 +1,4 @@
+import { KnowledgePanel } from "./knowledge-panel";
 import { InitializationSettings } from "./initialization-settings";
 import { orderedChats } from "./chat-order";
 import { ScheduleCard } from "./schedule-card";
@@ -666,6 +667,21 @@ function App() {
 											<small role="status">Generating title…</small>
 										)}
 									</div>
+									{project && !project.unassigned && (
+										<KnowledgePanel
+											key={project.id}
+											projectId={project.id}
+											sessionId={session.id}
+											projectArchived={project.archived}
+											sessionArchived={session.archived}
+											onSource={(id) => {
+												const source = state.projects.find((item) =>
+													item.sessions.some((chat) => chat.id === id),
+												);
+												if (source) openSession(source.id, id);
+											}}
+										/>
+									)}
 									<div className="timeline">
 										<Events events={session.events} />
 										{!session.events.length && (

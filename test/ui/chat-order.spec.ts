@@ -13,6 +13,17 @@ test("real Supervisor acceptance IPC reorders both groups before Worker completi
 		platform: "node",
 		format: "cjs",
 		external: ["electron"],
+		plugins: [
+			{
+				name: "local-core",
+				setup(builder) {
+					builder.onResolve({ filter: /^@cybergarage\/orbit$/ }, () => ({
+						path: path.resolve("node_modules/@cybergarage/orbit/dist/index.js"),
+						external: true,
+					}));
+				},
+			},
+		],
 		outfile: entry,
 	});
 	const launch = () =>

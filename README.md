@@ -30,12 +30,25 @@ Current Electron UI in Light appearance, with compact Project/Chat navigation, u
 
 ```sh
 cd ~/Src/orbit-app
+# Bootstrap the exact unpublished Core source (no npm release is assumed).
+# Choose a new directory; stop if it already exists.
+set -e
+git clone https://github.com/cybergarage/orbit.git ../orbit-project-knowledge-core
+git -C ../orbit-project-knowledge-core checkout --detach 7c5288b336315e7fd3eeee562b244e23a8498ad7
+npm ci --prefix ../orbit-project-knowledge-core
+node scripts/prepare-local-core.mjs ../orbit-project-knowledge-core
 npm ci
 npm run worker:build
 npm run dev
 ```
 
 Create a project and session, select a model, and submit a task. Review each requested write or command, then inspect its progress, results, and workspace files. Projects use an app-managed workspace or an optional existing local directory. Conversations save their model choice and persisted Orbit history.
+
+Project knowledge is automatically extracted after successful conversations and
+reused in related conversations in the same logical Project. No manual saving or
+preview is needed. The supplementary **Project knowledge** panel provides source
+inspection, correction, deletion, stopping and budgets. Closing windows keeps the
+host running; explicit Quit stops it. See [use, migration, limits and validation](docs/project-knowledge.md).
 
 ## Build a local app
 
@@ -50,7 +63,7 @@ The unsigned arm64 app still requires Docker, Ollama, and the locally built work
 
 - Home/new-chat, project creation and editing with optional directory/instructions, session rename/move, conversation model selection, runtime health, operation approvals, cancellation, saved history, and top-level artifact listing.
 - Scheduled definitions and a separate execution history with input, answer, operation/approval events and failure/interruption details.
-- Session moves preserve original Orbit storage and working directory. Changing a project directory affects new chats only; project guidance affects future tasks. Running or recovery-pending sessions cannot move. Project/Chat names use Orbit core 0.9.3 APIs. Unsupported legacy name formats are rejected without data deletion. Supported combined profiles move their registry location without retaining a copy.
+- Session moves preserve original Orbit storage and working directory. Changing a project directory affects new chats only; project guidance affects future tasks. Running or recovery-pending sessions cannot move. Project/Chat names use Orbit core APIs pinned to the local `0.9.3-project-memory.0` artifact. Unsupported legacy name formats are rejected without data deletion. Supported combined profiles move their registry location without retaining a copy.
 - Saved System/Light/Dark appearance and compact Project/Chat navigation, with Settings categories for Appearance and real runtime Status.
 - One-time, fixed-interval and calendar schedules with a saved IANA time zone. Relative first runs start from successful creation; fixed intervals keep their planned anchor, while daily/weekly rules keep local wall time. **The app must be running.** Missed occurrences coalesce; interrupted work is not automatically replayed. There is no background daemon.
 - Scheduled tasks have explicit Enable/Disable and confirmed Delete controls. Enabling retains a future slot or skips elapsed recurring slots while preserving the original interval/calendar anchor and time zone; past or already-admitted one-time slots require editing to a new future time. Editing a disabled task keeps it disabled. Disable/Delete prevent future admission and never cancel an already-admitted run. Delete removes only the definition: execution history, chats and working files remain. Changes persist across restart.
@@ -67,4 +80,4 @@ See [verification and security limitations](docs/verification.md) for tested beh
 
 Chats within each Project and the unassigned Chats group follow accepted user submissions, newest first. Typing, viewing, responses, names and scheduled work do not affect this order. Rejected requests do not move Chats; failures after acceptance keep their position. Order survives restart and project moves. Older Chats without explicit submission ordering retain their relative saved order until their next user submission; historical submissions have no reliable human/schedule origin and are not inferred. Project order is unchanged.
 
-Settings → Initialization supports settings-only, saved-data, and settings/data/dedicated-cache initialization through published Orbit core 0.9.3. Each flow previews exact App-owned targets, stops and verifies writers, creates a final metadata plan, and requires explicit permanent confirmation and external exclusive-control declarations. Working files, external workspaces, shared context, unknown objects and browser profile data remain outside the allowlist. Incomplete initialization stays offline across restart; success requires restart. See [scope, ownership and failure behavior](docs/initialization-adoption.md).
+Settings → Initialization supports settings-only, saved-data, and settings/data/dedicated-cache initialization through the pinned local Orbit Core maintenance API. Each flow previews exact App-owned targets, stops and verifies writers, creates a final metadata plan, and requires explicit permanent confirmation and external exclusive-control declarations. Working files, external workspaces, shared context, unknown objects and browser profile data remain outside the allowlist. Incomplete initialization stays offline across restart; success requires restart. See [scope, ownership and failure behavior](docs/initialization-adoption.md).

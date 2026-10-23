@@ -1,3 +1,6 @@
+import type { KnowledgeExtractor } from "@cybergarage/orbit";
+import type { AcquireSources } from "./source-leases";
+import { ProjectKnowledge } from "./project-knowledge";
 import { AppInitialization } from "./initialization-host";
 import type { InitializationMode } from "./initialization";
 import { initializationAvailability } from "./initialization";
@@ -46,6 +49,7 @@ function displayedStatus(run: RunControl, settled = false) {
 export class Supervisor {
 	readonly store: Store;
 	readonly titles: AutoTitles;
+	readonly knowledge: ProjectKnowledge;
 	readonly initialization: AppInitialization;
 	private maintenance = false;
 	private maintenanceError?: string;
@@ -73,8 +77,23 @@ export class Supervisor {
 			event: (e: any) => void,
 		) => new Worker(workspace, core, config, event),
 		titleGenerator = generateTitle,
+		knowledgeOptions: {
+			acquire?: AcquireSources;
+			extract?: KnowledgeExtractor;
+		} = {},
 	) {
 		this.store = new Store(root);
+		this.knowledge = new ProjectKnowledge(
+			this.store,
+			() =>
+				!this.admitted &&
+				!this.closed &&
+				!this.maintenance &&
+				!this.recoveryBlocked &&
+				!this.store.state.active,
+			knowledgeOptions.acquire,
+			knowledgeOptions.extract,
+		);
 		this.initialization = new AppInitialization(this.store);
 		this.titles = new AutoTitles(
 			this.store,
@@ -102,6 +121,7 @@ export class Supervisor {
 				await this.store.init(true);
 				await this.store.close();
 				await this.titles.close();
+				await this.knowledge.close();
 				this.storageStopped = true;
 				this.store.state.maintenance = {
 					error: this.maintenanceError,
@@ -114,6 +134,8 @@ export class Supervisor {
 		}
 		await this.store.init();
 		await this.reconcile();
+		await this.knowledge.init();
+		this.knowledge.kick();
 	}
 	async reconcile() {
 		if (this.reconciling) return this.reconciling;
@@ -235,6 +257,10 @@ export class Supervisor {
 		if (this.recoveryBlocked)
 			throw new Error("Previous worker recovery is blocked");
 		const session = this.store.session(p.projectId, p.sessionId);
+		if (session.archived || this.store.project(p.projectId).archived)
+			throw new Error(
+				"Restore the archived Project or conversation before submitting",
+			);
 		const prompt = text(p.prompt);
 		const model = text(p.model, 120);
 		identifier(p.requestId);
@@ -282,6 +308,7 @@ export class Supervisor {
 			});
 			await this.publish();
 			await this.titles.interrupt();
+			await this.knowledge.interrupt();
 			if (epoch !== this.epoch || this.closed || this.maintenance)
 				throw new Error("Submission cancelled");
 			await this.titles.provision(p.projectId, session, prompt, model);
@@ -322,12 +349,21 @@ export class Supervisor {
 			await this.publish();
 			if (epoch !== this.epoch || this.closed || this.maintenance)
 				throw new Error("Submission cancelled");
+			const projectContext = await this.knowledge.prepare(
+				p.projectId,
+				p.sessionId,
+				p.requestId,
+				prompt,
+			);
+			if (epoch !== this.epoch || this.closed || this.maintenance)
+				throw new Error("Submission cancelled");
 			const worker = this.factory(
 				workspace,
 				this.store.location(p.projectId, p.sessionId).core,
 				{
 					sessionId: p.sessionId,
 					requestId: p.requestId,
+					projectContext,
 					prompt: this.store.project(p.projectId).instructions
 						? `Project guidance (follow applicable workspace ORBIT.md / AGENTS.md instructions):\n${this.store.project(p.projectId).instructions}\n\nUser task:\n${prompt}`
 						: prompt,
@@ -385,6 +421,7 @@ export class Supervisor {
 					this.admittingSessionId = undefined;
 					if (this.currentRun === run) this.currentRun = undefined;
 					this.titles.kick();
+					this.knowledge.kick();
 				});
 			return { accepted: true };
 		} catch (e) {
@@ -514,6 +551,7 @@ export class Supervisor {
 			await this.initialization.mark("stopping");
 			if (!this.storageStopped) {
 				await this.titles.close();
+				await this.knowledge.close();
 				await this.cancel();
 				const drained = await Promise.allSettled(this.operations);
 				const failed = drained.find(
@@ -662,13 +700,41 @@ export class Supervisor {
 				await this.publish();
 				return result;
 			}
+			case "archive-project":
+			case "archive-session":
+				await this.knowledge.interrupt();
+				await this.titles.interrupt(p.sessionId);
+				await this.store.setArchived(
+					p.projectId,
+					commandName === "archive-session" ? p.sessionId : undefined,
+					p.archived,
+				);
+				await this.publish();
+				return;
+			case "knowledge-status":
+				this.store.project(p.projectId);
+				return this.knowledge.status(p.projectId);
+			case "knowledge-control":
+				this.store.project(p.projectId);
+				return this.knowledge.configure(p.projectId, p.enabled, p.limits);
+			case "knowledge-edit":
+				this.store.project(p.projectId);
+				return this.knowledge.edit(
+					p.projectId,
+					p.id,
+					text(p.body, 8192),
+					p.retired,
+					p.expectedRevision,
+				);
 			case "move-session": {
+				await this.knowledge.interrupt();
 				const target = p.targetProjectId || (await this.store.chats()).id;
 				const result = await this.store.moveSession({
 					...p,
 					targetProjectId: target,
 				});
 				await this.publish();
+				await this.knowledge.synchronize(p.sessionId);
 				return { ...result, projectId: target };
 			}
 			case "create-session": {
@@ -797,6 +863,7 @@ export class Supervisor {
 			case "enable-schedule":
 			case "delete-schedule":
 			case "disable-schedule": {
+				this.knowledge.kick();
 				const s = this.store.state.schedules.find(
 					(s) => s.id === identifier(p.id),
 				);
@@ -849,9 +916,16 @@ export class Supervisor {
 			)
 				return;
 			const s = this.store.state.schedules.find(
-				(s) => s.enabled && s.nextAt <= now,
+				(s) =>
+					s.enabled &&
+					s.nextAt <= now &&
+					!this.store.project(s.projectId).archived &&
+					!this.store.session(s.projectId, s.sessionId).archived,
 			);
-			if (!s) return;
+			if (!s) {
+				this.knowledge.poll();
+				return;
+			}
 			const execution = {
 				id: randomUUID(),
 				scheduleId: s.id,
@@ -924,6 +998,7 @@ export class Supervisor {
 			await this.maintenanceTask?.catch(() => {});
 			if (!this.storageStopped) {
 				await this.titles.close();
+				await this.knowledge.close();
 				await this.cancel();
 				await Promise.allSettled(this.operations);
 				await this.workerFinished;
@@ -934,6 +1009,7 @@ export class Supervisor {
 			return;
 		}
 		await this.titles.close();
+		await this.knowledge.close();
 		await this.cancel();
 		await Promise.allSettled(this.operations);
 		await this.workerFinished;

@@ -329,6 +329,37 @@ export class Store {
 		if (!s) throw new Error("Session not found");
 		return s;
 	}
+	async setArchived(
+		projectId: string,
+		sessionId: string | undefined,
+		archived: boolean,
+	) {
+		if (typeof archived !== "boolean") throw new Error("Archive flag required");
+		const project = this.project(projectId);
+		if (project.unassigned)
+			throw new Error("Chats is not an archivable Project");
+		if (sessionId) {
+			const session = this.assertMovable(projectId, sessionId);
+			await this.names.call(this.location(projectId, sessionId).core, {
+				command: "archive-session",
+				sessionId,
+				archived,
+			});
+			session.archived = archived;
+		} else {
+			for (const session of project.sessions)
+				this.assertMovable(projectId, session.id);
+			const result = await this.names.call(this.core(projectId), {
+				command: "archive-project",
+				projectId,
+				archived,
+				operationId: randomUUID(),
+			});
+			project.archived = archived;
+			project.nameRevision = result.revision;
+		}
+	}
+
 	async createProject(
 		name: unknown,
 		directory?: unknown,

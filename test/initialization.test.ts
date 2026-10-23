@@ -10,7 +10,11 @@ import { InitializationSettings } from "../src/initialization-settings";
 import { initializationAvailability } from "../src/initialization";
 import { Supervisor } from "../src/supervisor";
 import { Store, assertAppProfileRoot } from "../src/store";
-import { AppInitialization, assertExternalWritersStopped } from "../src/initialization-host";
+import {
+	AppInitialization,
+	assertExternalWritersStopped,
+} from "../src/initialization-host";
+import { ContainerCoreNames } from "../src/core-names";
 import { containerMaintenance } from "../src/maintenance-container";
 
 const consent = {
@@ -67,16 +71,23 @@ async function missing(file: string) {
 	await assert.rejects(fs.access(file), { code: "ENOENT" });
 }
 
-test("initialization status is read-only, published versions match and settings need explicit selection", async () => {
+test("initialization status is read-only, pinned local versions match and settings need explicit selection", async () => {
 	const pkg = JSON.parse(
 		await fs.readFile(
 			new URL("../worker/package.json", import.meta.url),
 			"utf8",
 		),
 	);
+	const artifact = JSON.parse(
+		await fs.readFile(
+			new URL("../worker/packages/core-artifact.json", import.meta.url),
+			"utf8",
+		),
+	);
+	assert.equal(initializationAvailability.coreVersion, artifact.version);
 	assert.equal(
-		initializationAvailability.coreVersion,
 		pkg.dependencies["@cybergarage/orbit"],
+		`file:packages/${artifact.file}`,
 	);
 	const host = JSON.parse(
 		await fs.readFile(new URL("../package-lock.json", import.meta.url), "utf8"),
@@ -123,6 +134,53 @@ test("initialization status is read-only, published versions match and settings 
 for (const mode of ["settings", "data", "all"] as const)
 	test(`${mode} uses published plans, preserves working files and restarts without stale state`, async (t) => {
 		const { root, sup, p, s } = await fixture(t);
+		const names = new ContainerCoreNames(root);
+		const catalog = path.join(root, "catalog");
+		const pairId = randomUUID(),
+			jobId = randomUUID();
+		const mutate = (mutation: Record<string, unknown>) =>
+			names.call(catalog, {
+				command: "catalog-mutate",
+				operationId: randomUUID(),
+				mutation,
+			});
+		await mutate({
+			kind: "membership",
+			pairId,
+			sessionId: s.id,
+			projectId: p.id,
+			expectedRevision: 0,
+			unavailable: false,
+		});
+		await mutate({
+			kind: "extraction",
+			expectedRevision: 0,
+			generation: 0,
+			entries: [],
+			job: {
+				id: jobId,
+				projectId: p.id,
+				pairId,
+				sessionId: s.id,
+				runId: randomUUID(),
+				membershipRevision: 1,
+				sourceDigest: "a".repeat(64),
+				messages: [
+					{
+						id: randomUUID(),
+						role: "user",
+						text: "Synthetic migration fixture",
+						digest: "b".repeat(64),
+					},
+				],
+				state: "pending",
+				attempt: 0,
+				revision: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+			},
+		});
+		await names.close();
 		const before = await fs.readFile(Store.stateFile(root), "utf8");
 		const preview = await sup.dispatch("initialization-preview", {
 			mode,
@@ -202,10 +260,25 @@ for (const mode of ["settings", "data", "all"] as const)
 		if (mode === "settings") {
 			assert.equal(restarted.store.session(p.id, s.id).name, s.name);
 			assert.equal(restarted.store.state.schedules.length, 1);
+			const retained = new ContainerCoreNames(root);
+			try {
+				assert.equal(
+					(
+						await retained.call(catalog, {
+							command: "catalog-query",
+							query: { kind: "extraction", id: jobId },
+						})
+					).state,
+					"pending",
+				);
+			} finally {
+				await retained.close();
+			}
 		} else {
 			assert.equal(restarted.store.state.projects.length, 0);
 			assert.equal(restarted.store.state.schedules.length, 0);
 			await missing(path.join(sup.store.core(p.id), "sessions"));
+			await missing(path.join(catalog, "projects.sqlite"));
 			const fresh = await restarted.store.createProject("Fresh after reset");
 			await restarted.store.createSession(fresh.id);
 		}
@@ -754,7 +827,6 @@ test("a saved workspace overlapping a core target refuses deletion", async (t) =
 	await sup.close();
 });
 
-
 test("container inventory disappearance needs successful fresh absence confirmation", async (t) => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-inspection-"));
 	t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -763,7 +835,10 @@ test("container inventory disappearance needs successful fresh absence confirmat
 		const inspect = async (_exe: string, args: string[]) => {
 			calls.push(args);
 			if (calls.length === 1) return "a".repeat(64);
-			if (calls.length === 2) throw new Error(outcome === "other-error" ? "daemon unavailable" : "no such object");
+			if (calls.length === 2)
+				throw new Error(
+					outcome === "other-error" ? "daemon unavailable" : "no such object",
+				);
 			if (outcome === "unavailable") throw new Error("daemon unavailable");
 			return outcome === "present" ? "a".repeat(64) : "";
 		};
@@ -771,6 +846,13 @@ test("container inventory disappearance needs successful fresh absence confirmat
 		if (outcome === "absent") await result;
 		else await assert.rejects(result);
 		assert.equal(calls.length, outcome === "other-error" ? 2 : 3);
-		if (calls.length === 3) assert.deepEqual(calls[2], ["ps", "-aq", "--no-trunc", "--filter", `id=${"a".repeat(64)}`]);
+		if (calls.length === 3)
+			assert.deepEqual(calls[2], [
+				"ps",
+				"-aq",
+				"--no-trunc",
+				"--filter",
+				`id=${"a".repeat(64)}`,
+			]);
 	}
 });

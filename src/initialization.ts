@@ -1,6 +1,6 @@
 export const initializationAvailability = {
 	available: true,
-	coreVersion: "0.9.3",
+	coreVersion: "0.9.3-project-memory.0",
 	reason:
 		"Preview App-owned targets, stop writers, then confirm permanent initialization.",
 } as const;

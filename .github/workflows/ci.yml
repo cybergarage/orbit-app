@@ -7,13 +7,26 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Includes clean pinned-Core installation/build plus all Docker and UI checks.
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: app
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: app
+      - name: Check out the pinned unpublished Core source
+        uses: actions/checkout@v4
+        with:
+          repository: cybergarage/orbit
+          ref: 7c5288b336315e7fd3eeee562b244e23a8498ad7
+          path: orbit
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: app/package-lock.json
       - name: Enable complete host handle inspection on the disposable runner
         # Docker overlay/netns mounts otherwise produce incomplete lsof output.
         # Keep the App fail-closed; grant only the inspector read/trace access.
@@ -21,6 +34,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lsof libcap2-bin
           sudo setcap cap_dac_read_search,cap_sys_ptrace+ep /usr/bin/lsof
+      - name: Build the exact local Core artifact before app dependency installation
+        run: |
+          npm ci --prefix ../orbit
+          node scripts/prepare-local-core.mjs ../orbit
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
@@ -31,4 +48,4 @@ jobs:
       - run: npx playwright install-deps chromium
       - run: xvfb-run -a npx playwright test
       - name: Offline worker import and shell smoke check
-        run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --workdir /opt/worker --entrypoint node orbit-app-worker:core-0.9.3 --input-type=module -e "import {Agent} from '@cybergarage/orbit'; import {execFileSync} from 'node:child_process'; if(typeof Agent !== 'function')process.exit(1); console.log(execFileSync('bash',['-lc','echo worker-ready']).toString());"
+        run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --workdir /opt/worker --entrypoint node orbit-app-worker:project-memory-local --input-type=module -e "import {Agent} from '@cybergarage/orbit'; import {execFileSync} from 'node:child_process'; if(typeof Agent !== 'function')process.exit(1); console.log(execFileSync('bash',['-lc','echo worker-ready']).toString());"

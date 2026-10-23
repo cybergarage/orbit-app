@@ -77,15 +77,24 @@ for (const mode of ["settings", "data", "all"] as const)
 			await expect(
 				page.getByRole("button", { name: "Permanently initialize" }),
 			).toHaveCount(0);
+			const planningStarted = Date.now();
 			await page
 				.getByRole("button", {
 					name: "Stop App writers and review final targets",
 					exact: true,
 				})
 				.click();
+			await expect(page.getByRole("status")).toContainText(
+				"Stopping App writers",
+			);
 			await expect(
 				page.getByRole("heading", { name: "Final initialization targets" }),
-			).toBeVisible();
+				// This awaits actual external writer shutdown and Docker storage verification,
+				// not a DOM-only update. Record its duration rather than hiding stalled IPC.
+			).toBeVisible({ timeout: 30000 });
+			console.log(
+				`Final ${mode} planning completed in ${Date.now() - planningStarted}ms`,
+			);
 			const action = page.getByRole("button", {
 				name: "Permanently initialize",
 				exact: true,

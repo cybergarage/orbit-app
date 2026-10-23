@@ -15,11 +15,11 @@
     "test": "tsx --test --test-concurrency=1 test/*.test.ts worker/*.test.mjs",
     "test:ui": "npm run build && playwright test",
     "test:live": "tsx scripts/live.ts",
-    "worker:build": "docker build -t orbit-app-worker:core-0.9.3 worker",
+    "worker:build": "docker build -t orbit-app-worker:project-memory-local worker",
     "package": "npm run build && node scripts/package.mjs"
   },
   "dependencies": {
-    "@cybergarage/orbit": "0.9.3",
+    "@cybergarage/orbit": "file:worker/packages/cybergarage-orbit-0.9.3-project-memory.0.tgz",
     "@js-temporal/polyfill": "0.5.1",
     "react": "19.2.8",
     "react-dom": "19.2.8"

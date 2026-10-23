@@ -311,3 +311,37 @@ cleanup; unstructured exits remain bounded generic errors. The exact failed real
 revision/replay/membership test and7 coordination/lifecycle regressions pass.
 The previous87/88 full result is retained as failure evidence, not reported as a
 successful final run; full89-case and full UI validation follow this correction.
+
+### Knowledge UI IPC completion follow-up
+
+Exact-head15a0758 passed89 unit cases locally and in CI, and15 UI cases locally,
+but Linux CI exposed5-second assertions racing real IPC: Refresh was still busy,
+or Stop had not yet displayed Resume. One successful budget-control IPC measured
+7543ms, already longer than that default. Refresh/initial display also performed
+the same status load twice (`action(load)` followed by the action's post-load).
+They now perform one status request; mutation actions still refresh after commit.
+
+Knowledge-only UI operations observe the actual fieldset disabled property,
+await its completion under a targeted30s budget, reject visible action errors,
+and then assert UI values plus authoritative configuration readback. Other test
+assertion budgets are unchanged; no sleeps or test exclusions are introduced.
+IPC traces record request start, dispatch completion, reply completion and saved
+configuration; metadata traces record finish times, and failure output captures
+UI busy/buttons/input state. A controlled reply gate proves Stop can be committed
+(`enabled=false`) while the UI correctly remains busy until the reply, and verifies
+the final state after release. Refresh is asserted to issue exactly one status IPC
+and preserve the draft; partial edits/restart/Project switching preserve all caps.
+
+The automatic A→B/closed-window/restart/edit/stop/delete path and budget persistence
+are separate cohesive UI cases, retaining their assertions and180s per-case cap.
+Focused M4 verification passed both cases (1.7min): Stop3675ms including the explicit
+reply/readback gate, correction2357ms, deletion2328ms, Resume2829ms, Refresh1337ms,
+and budget applies2828/2851ms. These timings distinguish saved state and visual
+completion; they are not proof of all Linux latency distributions.
+
+Automatic run40011219659 ended cancelled; its check annotation explicitly says
+"The job has exceeded the maximum execution time of25m0s". That runner reached UI
+20min after job start, while another measured full UI took7.7min. The overall job
+budget is therefore35min to cover measured finite serial work and variance. All
+unit/UI/smoke steps remain, per-operation/helper limits remain, and quality-gate
+conditions are unchanged. No workflow reruns/cancellations were manually invoked.

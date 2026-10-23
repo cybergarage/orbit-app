@@ -1,11 +1,16 @@
-import { test, expect, _electron as electron } from "@playwright/test";
+import {
+	test,
+	expect,
+	_electron as electron,
+	type Page,
+	type ElectronApplication,
+} from "@playwright/test";
 import { build } from "esbuild";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-test("Project knowledge UI learns A, reuses it in B, edits, stops and deletes through real IPC", async () => {
-	test.setTimeout(180000);
+async function knowledgeFixture() {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-knowledge-ui-")),
 		entry = path.join(root, "main.cjs");
 	await build({
@@ -37,10 +42,98 @@ test("Project knowledge UI learns A, reuses it in B, edits, stops and deletes th
 				ORBIT_KNOWLEDGE_DIST: path.resolve("dist"),
 			},
 		});
+	return { root, launch };
+}
+async function openKnowledge(page: Page) {
+	await page.getByText("Project knowledge", { exact: true }).click();
+	await expect(page.locator(".knowledge-panel > fieldset")).toHaveJSProperty(
+		"disabled",
+		true,
+	);
+	await expect(page.locator(".knowledge-panel > fieldset")).toHaveJSProperty(
+		"disabled",
+		false,
+		{
+			timeout: 30000,
+		},
+	);
+	await expect(page.locator(".knowledge-panel [role=alert]")).toHaveCount(0);
+}
+async function knowledgeAction(
+	page: Page,
+	name: string,
+	whileBusy?: () => Promise<void>,
+) {
+	const started = Date.now();
+	await page.getByRole("button", { name, exact: true }).click();
+	const fieldset = page.locator(".knowledge-panel > fieldset");
+	await expect(fieldset).toHaveJSProperty("disabled", true);
+	if (whileBusy) await whileBusy();
+	// This budget covers the real serialized Docker mutation and its status IPC.
+	await expect(fieldset).toHaveJSProperty("disabled", false, {
+		timeout: 30000,
+	});
+	await expect(page.locator(".knowledge-panel [role=alert]")).toHaveCount(0);
+	console.log(
+		"Knowledge UI action",
+		JSON.stringify({
+			name,
+			started,
+			completed: Date.now(),
+			ms: Date.now() - started,
+		}),
+	);
+}
+async function reportKnowledgeFailure(
+	app: ElectronApplication,
+	page: Page,
+	root: string,
+) {
+	console.log("Synthetic failure profile retained in place", root);
+	console.log(
+		"Synthetic IPC trace",
+		JSON.stringify(
+			await app
+				.evaluate(() => (globalThis as any).knowledgeControl.ipcTrace)
+				.catch(() => []),
+		),
+	);
+	console.log(
+		"Synthetic metadata failure trace",
+		JSON.stringify(
+			await app
+				.evaluate(() => (globalThis as any).knowledgeControl.metadataTrace)
+				.catch(() => []),
+		),
+	);
+	console.log(
+		"Synthetic UI state",
+		JSON.stringify(
+			await page
+				.locator(".knowledge-panel")
+				.evaluate((element) => ({
+					disabled: element.querySelector("fieldset")?.disabled,
+					buttons: Array.from(element.querySelectorAll("button")).map((b) => ({
+						text: b.textContent,
+						disabled: b.disabled,
+					})),
+					inputs: Array.from(element.querySelectorAll("input")).map((i) => ({
+						value: i.value,
+						disabled: i.disabled,
+					})),
+				}))
+				.catch(() => null),
+		),
+	);
+}
+
+test("Project knowledge UI learns A, reuses it in B, edits, stops and deletes through real IPC", async () => {
+	test.setTimeout(180000);
+	const { root, launch } = await knowledgeFixture();
 	let app = await launch();
 	let failed = false;
+	let page = await app.firstWindow();
 	try {
-		let page = await app.firstWindow();
 		const ids = await page.evaluate(async () => {
 			const p = await window.orbit.call("create-project", {
 				name: "Knowledge UI",
@@ -116,34 +209,8 @@ test("Project knowledge UI learns A, reuses it in B, edits, stops and deletes th
 			)
 			.toBe(1);
 		await page.getByRole("button", { name: "Decision A", exact: true }).click();
-		await page.getByText("Project knowledge", { exact: true }).click();
+		await openKnowledge(page);
 		await expect(page.locator(".knowledge-panel article")).toHaveCount(1);
-		await page.getByLabel("Lifetime input-token limit").fill("8192");
-		await page.getByLabel("Lifetime output-token limit").fill("2048");
-		await page.getByLabel("Lifetime call limit").fill("2");
-		const applyLimits = page.getByRole("button", {
-			name: "Apply token limit",
-			exact: true,
-		});
-		await applyLimits.click();
-		// A Docker-backed mutation is complete only when action() finishes its
-		// persisted write and refresh. Avoid racing a default 5s DOM poll against it.
-		await expect(applyLimits).toBeDisabled();
-		await expect(applyLimits).toBeEnabled({ timeout: 30000 });
-		await expect
-			.poll(() =>
-				page.evaluate(
-					async (id) =>
-						(await window.orbit.call("knowledge-status", { projectId: id }))
-							.config,
-					ids.p,
-				),
-			)
-			.toMatchObject({
-				maxInputTokens: 8192,
-				maxOutputTokens: 2048,
-				maxCalls: 2,
-			});
 		await app.close();
 		app = await launch();
 		page = await app.firstWindow();
@@ -155,56 +222,45 @@ test("Project knowledge UI learns A, reuses it in B, edits, stops and deletes th
 		await expect(
 			page.getByText("PostgreSQL selected", { exact: true }),
 		).toBeVisible({ timeout: 60000 });
-		await page.getByText("Project knowledge", { exact: true }).click();
+		await openKnowledge(page);
 		await expect(page.locator(".knowledge-panel article")).toHaveCount(1);
-		await expect(page.getByLabel("Lifetime input-token limit")).toHaveValue(
-			"8192",
-		);
-		await expect(page.getByLabel("Lifetime output-token limit")).toHaveValue(
-			"2048",
-		);
-		await expect(page.getByLabel("Lifetime call limit")).toHaveValue("2");
-		await page.getByLabel("Lifetime input-token limit").fill("12288");
-		await page
-			.getByRole("button", { name: "Refresh knowledge", exact: true })
-			.click();
-		await expect(
-			page.getByRole("button", { name: "Refresh knowledge", exact: true }),
-		).toBeDisabled();
-		await expect(
-			page.getByRole("button", { name: "Refresh knowledge", exact: true }),
-		).toBeEnabled();
-		await expect(page.getByLabel("Lifetime input-token limit")).toHaveValue(
-			"12288",
-		);
-		await page
-			.getByRole("button", { name: "Apply token limit", exact: true })
-			.click();
-		const apply = page.getByRole("button", {
-			name: "Apply token limit",
-			exact: true,
-		});
-		await expect(apply).toBeDisabled();
-		// Configure awaits real source cancellation, catalog mutation and status refresh.
-		await expect(apply).toBeEnabled({ timeout: 30000 });
-		const applied = await page.evaluate(
-			async (id) =>
-				(await window.orbit.call("knowledge-status", { projectId: id })).config,
-			ids.p,
-		);
-		const requests = await app.evaluate(
-			() => (globalThis as any).knowledgeControl.limitRequests,
-		);
-		console.log("Completed limit requests", JSON.stringify(requests));
-		expect(applied).toMatchObject({
-			maxInputTokens: 12288,
-			maxOutputTokens: 2048,
-			maxCalls: 2,
-		});
 
-		await page
-			.getByRole("button", { name: "Stop learning", exact: true })
-			.click();
+		await app.evaluate(() =>
+			(globalThis as any).knowledgeControl.holdNextControlReply(),
+		);
+		await knowledgeAction(page, "Stop learning", async () => {
+			try {
+				await expect
+					.poll(
+						() =>
+							app.evaluate(
+								() =>
+									(globalThis as any).knowledgeControl.ipcTrace
+										.filter((t: any) => t.command === "knowledge-control")
+										.at(-1)?.dispatched,
+							),
+						{ timeout: 30000 },
+					)
+					.toEqual(expect.any(Number));
+				const saved = await page.evaluate(
+					async (projectId) =>
+						(await window.orbit.call("knowledge-status", { projectId })).config,
+					ids.p,
+				);
+				expect(saved.enabled).toBe(false);
+				await expect(
+					page.getByRole("button", { name: "Resume learning", exact: true }),
+				).toHaveCount(0);
+				console.log(
+					"Stop persisted before response release",
+					JSON.stringify(saved),
+				);
+			} finally {
+				await app.evaluate(() =>
+					(globalThis as any).knowledgeControl.releaseControlReply(),
+				);
+			}
+		});
 		await expect(
 			page.getByRole("button", { name: "Resume learning", exact: true }),
 		).toBeVisible();
@@ -214,69 +270,115 @@ test("Project knowledge UI learns A, reuses it in B, edits, stops and deletes th
 		await page
 			.getByLabel("Knowledge correction")
 			.fill("Use PostgreSQL with verified migrations.");
-		await page
-			.getByRole("button", { name: "Save correction", exact: true })
-			.click();
+		await knowledgeAction(page, "Save correction");
 		await expect(
 			page.getByText("Use PostgreSQL with verified migrations.", {
 				exact: true,
 			}),
 		).toBeVisible();
-		await page
-			.getByRole("button", { name: "Delete knowledge", exact: true })
-			.click();
+		await knowledgeAction(page, "Delete knowledge");
 		await expect(page.locator(".knowledge-panel article strong")).toContainText(
 			"deleted",
 		);
-		await page
-			.getByRole("button", { name: "Resume learning", exact: true })
-			.click();
+		await knowledgeAction(page, "Resume learning");
 		const status = await page.evaluate(
 			async (projectId) => window.orbit.call("knowledge-status", { projectId }),
 			ids.p,
 		);
 		expect(status.entries[0].retired).toBe(true);
-		await page.evaluate(async () => {
-			let stage = "create-project";
-			try {
-				const other = await window.orbit.call("create-project", {
-					name: "Other limits",
-				});
-				stage = "create-session";
+		expect(status.config.enabled).toBe(true);
+		await page.screenshot({
+			path: "/tmp/orbit-knowledge-app-ui.png",
+			fullPage: true,
+		});
+	} catch (error) {
+		failed = true;
+		await reportKnowledgeFailure(app, page, root);
+		throw error;
+	} finally {
+		await app.close();
+		if (!failed) await fs.rm(root, { recursive: true, force: true });
+	}
+});
+
+test("Project budget UI restores saved limits through refresh, partial edits, restart and Project switching", async () => {
+	test.setTimeout(180000);
+	const { root, launch } = await knowledgeFixture();
+	let app = await launch();
+	let page = await app.firstWindow();
+	let failed = false;
+	try {
+		const ids = await page.evaluate(async () => {
+			const result: string[] = [];
+			for (const [name, input, output, calls] of [
+				["Budget A", 8192, 2048, 2],
+				["Budget B", 6144, 1024, 1],
+			] as const) {
+				const p = await window.orbit.call("create-project", { name });
 				const chat = await window.orbit.call("create-session", {
-					projectId: other.id,
+					projectId: p.id,
 				});
-				stage = "rename-session";
 				await window.orbit.call("rename-session", {
-					projectId: other.id,
+					projectId: p.id,
 					sessionId: chat.id,
-					name: "Other limits chat",
+					name,
 					expectedRevision: chat.nameRevision ?? 0,
 					operationId: crypto.randomUUID(),
 				});
-				stage = "configure-other";
 				await window.orbit.call("knowledge-control", {
-					projectId: other.id,
+					projectId: p.id,
 					enabled: false,
-					limits: { maxInputTokens: 6144, maxOutputTokens: 1024, maxCalls: 1 },
+					limits: {
+						maxInputTokens: input,
+						maxOutputTokens: output,
+						maxCalls: calls,
+					},
 				});
-			} catch (error) {
-				throw new Error(`Other Project ${stage}: ${String(error)}`);
+				result.push(p.id);
 			}
+			return result;
 		});
-		await page
-			.getByRole("button", { name: "Other limits chat", exact: true })
-			.click();
-		await page.getByText("Project knowledge", { exact: true }).click();
+		await page.getByRole("button", { name: "Budget A", exact: true }).click();
+		await openKnowledge(page);
 		await expect(page.getByLabel("Lifetime input-token limit")).toHaveValue(
-			"6144",
+			"8192",
 		);
-		await expect(page.getByLabel("Lifetime output-token limit")).toHaveValue(
-			"1024",
+		await page.getByLabel("Lifetime input-token limit").fill("12288");
+		const before = await app.evaluate(
+			() =>
+				(globalThis as any).knowledgeControl.ipcTrace.filter(
+					(t: any) => t.command === "knowledge-status",
+				).length,
 		);
-		await expect(page.getByLabel("Lifetime call limit")).toHaveValue("1");
-		await page.getByRole("button", { name: "Question B", exact: true }).click();
-		await page.getByText("Project knowledge", { exact: true }).click();
+		await knowledgeAction(page, "Refresh knowledge");
+		const after = await app.evaluate(
+			() =>
+				(globalThis as any).knowledgeControl.ipcTrace.filter(
+					(t: any) => t.command === "knowledge-status",
+				).length,
+		);
+		expect(after - before).toBe(1);
+		await expect(page.getByLabel("Lifetime input-token limit")).toHaveValue(
+			"12288",
+		);
+		await knowledgeAction(page, "Apply token limit");
+		const read = () =>
+			page.evaluate(
+				async (projectId) =>
+					(await window.orbit.call("knowledge-status", { projectId })).config,
+				ids[0],
+			);
+		expect(await read()).toMatchObject({
+			maxInputTokens: 12288,
+			maxOutputTokens: 2048,
+			maxCalls: 2,
+			enabled: false,
+		});
+		await app.close();
+		app = await launch();
+		page = await app.firstWindow();
+		await page.getByRole("button", { name: "Budget A", exact: true }).click();
+		await openKnowledge(page);
 		await expect(page.getByLabel("Lifetime input-token limit")).toHaveValue(
 			"12288",
 		);
@@ -284,21 +386,41 @@ test("Project knowledge UI learns A, reuses it in B, edits, stops and deletes th
 			"2048",
 		);
 		await expect(page.getByLabel("Lifetime call limit")).toHaveValue("2");
-		await page.screenshot({
-			path: "/tmp/orbit-knowledge-app-ui.png",
-			fullPage: true,
+		await page.getByLabel("Lifetime input-token limit").fill("14336");
+		await knowledgeAction(page, "Apply token limit");
+		expect(await read()).toMatchObject({
+			maxInputTokens: 14336,
+			maxOutputTokens: 2048,
+			maxCalls: 2,
+			enabled: false,
 		});
-	} catch (error) {
-		failed = true;
-		console.log("Synthetic failure profile retained in place", root);
+		await page.getByRole("button", { name: "Budget B", exact: true }).click();
+		await openKnowledge(page);
+		await expect(page.getByLabel("Lifetime input-token limit")).toHaveValue(
+			"6144",
+		);
+		await expect(page.getByLabel("Lifetime output-token limit")).toHaveValue(
+			"1024",
+		);
+		await expect(page.getByLabel("Lifetime call limit")).toHaveValue("1");
+		await page.getByRole("button", { name: "Budget A", exact: true }).click();
+		await openKnowledge(page);
+		await expect(page.getByLabel("Lifetime input-token limit")).toHaveValue(
+			"14336",
+		);
+		await expect(page.getByLabel("Lifetime output-token limit")).toHaveValue(
+			"2048",
+		);
+		await expect(page.getByLabel("Lifetime call limit")).toHaveValue("2");
 		console.log(
-			"Synthetic metadata failure trace",
+			"Budget IPC trace",
 			JSON.stringify(
-				await app
-					.evaluate(() => (globalThis as any).knowledgeControl.metadataTrace)
-					.catch(() => []),
+				await app.evaluate(() => (globalThis as any).knowledgeControl.ipcTrace),
 			),
 		);
+	} catch (error) {
+		failed = true;
+		await reportKnowledgeFailure(app, page, root);
 		throw error;
 	} finally {
 		await app.close();

@@ -20,6 +20,7 @@ ContainerCoreNames.prototype.call = async function (core, request) {
 		core,
 		started: Date.now(),
 		resultId: undefined as string | undefined,
+		completed: undefined as number | undefined,
 		error: undefined as string | undefined,
 	};
 	metadataTrace.push(entry);
@@ -31,6 +32,8 @@ ContainerCoreNames.prototype.call = async function (core, request) {
 	} catch (error) {
 		entry.error = String(error);
 		throw error;
+	} finally {
+		entry.completed = Date.now();
 	}
 };
 let supervisor: Supervisor;
@@ -149,12 +152,30 @@ async function start() {
 	};
 	await supervisor.health();
 	const limitRequests: unknown[] = [];
+	const ipcTrace: any[] = [];
+	let nextControlReply: Promise<void> | undefined;
+	let releaseControlReply = () => {};
 	ipcMain.handle("orbit:call", async (_event, command, payload) => {
 		const started = Date.now();
+		const trace: any = { command, projectId: payload?.projectId, started };
+		if (command.startsWith("knowledge-")) {
+			ipcTrace.push(trace);
+			if (ipcTrace.length > 200) ipcTrace.shift();
+		}
+		const reply =
+			command === "knowledge-control" ? nextControlReply : undefined;
+		if (reply) nextControlReply = undefined;
 		let result: unknown;
 		try {
 			result = await supervisor.dispatch(command, payload);
+			if (command === "knowledge-status")
+				trace.savedConfig = (result as any).config;
+			trace.dispatched = Date.now();
+			if (reply) await reply;
+			trace.completed = Date.now();
 		} catch (error) {
+			trace.completed = Date.now();
+			trace.error = String(error);
 			const reader = new ContainerCoreNames(fixturePaths.root);
 			try {
 				const catalog = await reader.call(
@@ -181,6 +202,15 @@ async function start() {
 		releaseLearning,
 		limitRequests,
 		metadataTrace,
+		ipcTrace,
+		holdNextControlReply() {
+			nextControlReply = new Promise<void>((resolve) => {
+				releaseControlReply = resolve;
+			});
+		},
+		releaseControlReply() {
+			releaseControlReply();
+		},
 	};
 	await openWindow();
 }

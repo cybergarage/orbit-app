@@ -42,14 +42,14 @@ export function KnowledgePanel({
 			initializedProject.current = projectId;
 		}
 	};
-	const action = async (work: () => Promise<unknown>) => {
+	const action = async (work: () => Promise<unknown>, refresh = true) => {
 		if (pending.current) return;
 		pending.current = true;
 		setBusy(true);
 		try {
 			setError("");
 			await work();
-			await load();
+			if (refresh) await load();
 		} catch (error) {
 			setError(String(error));
 		} finally {
@@ -62,7 +62,7 @@ export function KnowledgePanel({
 		<details
 			className="knowledge-panel"
 			onToggle={(event) => {
-				if (event.currentTarget.open) void action(load);
+				if (event.currentTarget.open) void action(load, false);
 			}}
 		>
 			<summary>Project knowledge</summary>
@@ -99,7 +99,7 @@ export function KnowledgePanel({
 					reused by relevance. Historical context never grants permission.
 				</p>
 				{error && <p role="alert">{error}</p>}
-				<button type="button" onClick={() => void action(load)}>
+				<button type="button" onClick={() => void action(load, false)}>
 					Refresh knowledge
 				</button>
 				<button

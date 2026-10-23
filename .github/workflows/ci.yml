@@ -7,8 +7,8 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    # Includes all Docker, visibility and full Electron UI checks.
-    timeout-minutes: 25
+    # Measured slow runner:20min before UI plus7.7min UI; retain all checks.
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: app

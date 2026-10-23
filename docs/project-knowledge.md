@@ -92,13 +92,14 @@ data/all initialization removes the catalog through existing reviewed targets.
 The host stops extraction/helpers before initialization and preserves unknown
 files and workspaces according to existing maintenance rules.
 
-For this unpublished integration, run `node scripts/prepare-local-core.mjs` with
-the separate Core checkout (optional first argument), then `npm run worker:build`.
-Both host and worker lockfiles pin the same local prerelease tarball. Its SHA-256
-is in `worker/packages/core-artifact.json`; the image tag is
-`orbit-app-worker:project-memory-local`. The tarball is an ignored build artifact;
-regenerate it when checking out these changes. Nothing is published or installed
-into the user's existing app. See the Core Project guide and ADR for contracts.
+This unpublished integration installs the included audited Core artifact with
+`npm ci`, then `npm run worker:build`. Both host and worker lockfiles pin the
+same local prerelease tarball. Its SHA-256/source commit are recorded in
+`worker/packages/core-artifact.json`; the image tag is
+`orbit-app-worker:project-memory-local`. Other generated tarballs remain ignored.
+Source rebuild is an explicit maintenance operation described below; it is not
+required for fresh-checkout installation. Nothing is publicly released or
+installed into the user's existing app. See the Core guide/ADR for contracts.
 
 ## Validation evidence
 
@@ -167,27 +168,31 @@ late-target tests, and restart/switch/partial-edit UI in `test/ui/knowledge.spec
 ## Pull request dependency and clean-checkout reproduction
 
 This draft integration depends on Core source commit
-`7c5288b336315e7fd3eeee562b244e23a8498ad7` from
-`https://github.com/cybergarage/orbit.git`. The pin is recorded in
-`worker/packages/core-artifact.json` and the CI checkout. There is no published
-`0.9.3-project-memory.0` package dependency and the tarball is deliberately ignored.
+`7c5288b336315e7fd3eeee562b244e23a8498ad7` in
+`https://github.com/cybergarage/orbit.git` (Core PR #19). It uses no nonexistent
+published version. The exact audited `0.9.3-project-memory.0` tarball is committed
+under `worker/packages/`; its source and SHA-256 are recorded beside it. Both
+lockfiles use this same relative file, so a fresh checkout runs `npm ci` directly,
+then `npm run worker:build` and normal checks, without a local Core checkout.
 
-From a fresh app checkout, clone Core into a new separate sibling `../orbit-project-knowledge-core`, detach
-at that exact commit, install its dependencies with
-`npm ci --prefix ../orbit-project-knowledge-core`, then run
-`node scripts/prepare-local-core.mjs ../orbit-project-knowledge-core`.
-Stop if the destination exists; do not switch or overwrite another checkout. The script rejects a dirty
-or different Core commit and a mismatching artifact hash before app installation.
-It builds/packages only that explicitly selected checkout; it never switches or
-rewrites a user's existing Core branch. Then run `npm ci`, `npm run worker:build`
-and normal app checks. CI performs the same bootstrap before `npm ci`.
-The unchanged artifact SHA-256 is
+CI separately checks out the pinned Core source and verifies that clean revision
+and the included artifact hash before installation. The reviewed artifact has479
+source/distribution files; inspection found no credential patterns, private
+machine paths, session/database files or user data. It is an intentional package
+dependency, not a backup or public release. SHA-256:
 `17bb8964c7df8540c3e10f40331f8f98ddb53e7e2db35a6921f3129eb68e6eb2`.
 
-Core must be reviewed/merged first. If its final merged source differs, explicitly
-update the Core source commit in metadata and CI, review/rebuild the tarball,
-update its reviewed SHA-256 and both lockfiles together, rebuild the worker image,
-and rerun the integration/GUI tests. If a separately authorized Core release is
-later published, replace both file dependencies with that exact real version,
-regenerate both locks and the image, then rerun all checks before making this PR
-ready. No merge, public release or deployment is part of this change.
+Source rebuild remains available with `node scripts/prepare-local-core.mjs <path>`
+on an explicitly selected clean checkout. The script refuses revision or artifact
+hash changes. The initial Linux/Node22 CI rebuild produced different archive bytes
+than the reviewed M4 artifact; it was not accepted by weakening the hash check.
+Do not assume byte-identical archives across toolchains. Use the included pinned
+artifact, or audit a deliberate rebuild and explicitly update its hash and both
+locks together. No tool switches or rewrites another Core checkout.
+
+Core must be reviewed/merged first. If its merged source differs, explicitly
+update metadata and CI source commits, review/rebuild the package, update the
+reviewed hash and both locks, rebuild the worker and rerun all checks. After a
+separately authorized real Core release, replace both file dependencies with its
+exact real version, regenerate both locks/image and rerun integration/GUI checks
+before making this PR ready. No merge, release or deployment is authorized here.

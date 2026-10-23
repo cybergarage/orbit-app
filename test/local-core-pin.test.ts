@@ -23,7 +23,11 @@ test("unpublished Core source, artifact and CI checkout use the same explicit pi
 		"utf8",
 	);
 	assert.ok(workflow.includes(`ref: ${metadata.source.commit}`));
-	assert.ok(workflow.includes("node scripts/prepare-local-core.mjs ../orbit"));
+	assert.ok(
+		workflow.includes(
+			"node scripts/prepare-local-core.mjs --verify-source ../orbit",
+		),
+	);
 	const artifact = await fs.readFile(
 		path.join(root, "worker/packages", metadata.file),
 	);

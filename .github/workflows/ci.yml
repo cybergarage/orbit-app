@@ -7,7 +7,7 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    # Includes clean pinned-Core installation/build plus all Docker and UI checks.
+    # Includes all Docker, visibility and full Electron UI checks.
     timeout-minutes: 25
     defaults:
       run:
@@ -34,10 +34,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lsof libcap2-bin
           sudo setcap cap_dac_read_search,cap_sys_ptrace+ep /usr/bin/lsof
-      - name: Build the exact local Core artifact before app dependency installation
-        run: |
-          npm ci --prefix ../orbit
-          node scripts/prepare-local-core.mjs ../orbit
+      - name: Verify the source pin and audited vendored artifact before installation
+        run: node scripts/prepare-local-core.mjs --verify-source ../orbit
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck

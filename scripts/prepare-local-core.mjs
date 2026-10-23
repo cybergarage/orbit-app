@@ -33,6 +33,12 @@ if (
 		"Use a clean Core checkout at the exact source commit in worker/packages/core-artifact.json",
 	);
 if (verifyOnly) {
+	const artifact = path.join(root, "worker/packages", pinned.file);
+	const actual = createHash("sha256")
+		.update(fs.readFileSync(artifact))
+		.digest("hex");
+	if (actual !== pinned.sha256)
+		throw new Error("Vendored Core artifact hash mismatch");
 	process.stdout.write(`Verified Core source ${pinned.source.commit}\n`);
 	process.exit(0);
 }

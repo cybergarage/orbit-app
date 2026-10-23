@@ -30,13 +30,8 @@ Current Electron UI in Light appearance, with compact Project/Chat navigation, u
 
 ```sh
 cd ~/Src/orbit-app
-# Bootstrap the exact unpublished Core source (no npm release is assumed).
-# Choose a new directory; stop if it already exists.
-set -e
-git clone https://github.com/cybergarage/orbit.git ../orbit-project-knowledge-core
-git -C ../orbit-project-knowledge-core checkout --detach 7c5288b336315e7fd3eeee562b244e23a8498ad7
-npm ci --prefix ../orbit-project-knowledge-core
-node scripts/prepare-local-core.mjs ../orbit-project-knowledge-core
+# The audited local Core tarball is included; no unpublished registry version
+# or machine-specific source checkout is needed for installation.
 npm ci
 npm run worker:build
 npm run dev

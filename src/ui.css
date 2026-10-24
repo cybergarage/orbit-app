@@ -926,3 +926,9 @@ fieldset.theme-options {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+
+.knowledge-panel { margin: 10px 0; padding: 10px; border: 1px solid var(--border, #aaa); border-radius: 8px; font-size: 12px; }
+.knowledge-panel article { border-top: 1px solid #aaa; margin-top: 8px; padding: 8px 0; }
+.knowledge-panel button { margin: 4px; padding: 4px 8px; }
+.knowledge-panel textarea { width: 100%; min-height: 60px; }
+.knowledge-panel pre { white-space: pre-wrap; }

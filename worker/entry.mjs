@@ -9,6 +9,7 @@ import {
 	State,
 	MemorySessionLogStore,
 	createModelContextPolicy,
+    parseProjectContext,
 } from "@cybergarage/orbit";
 import { OllamaAgent } from "@cybergarage/orbit/dist/core/models/adapters/ollama.js";
 const emit = (type, data) =>
@@ -113,6 +114,7 @@ async function run(config) {
 			state: new State(session),
 			deps: { createModel: () => model },
 			contextPolicy,
+            ...(config.projectContext ? {projectMemory: {prepare: async () => parseProjectContext(config.projectContext)}} : {}),
 			settings: {
 				provider: "ollama",
 				model: config.model,
@@ -149,6 +151,7 @@ async function run(config) {
 			[new Message("user", { content: config.prompt })],
 			{
 				requestId: config.requestId,
+                ...(config.projectContext ? {memory: {mode: "automatic"}} : {}),
 				maxToolIterations: 8,
 				onEvent: (event) => emit("agent-event", event),
 				onRunSnapshot: (snapshot) => emit("run", snapshot),

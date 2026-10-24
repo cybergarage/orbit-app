@@ -5,3 +5,6 @@ playwright-report/
 test-results/
 *.log
 .DS_Store
+
+worker/packages/*.tgz
+!worker/packages/cybergarage-orbit-0.9.3-project-memory.0.tgz

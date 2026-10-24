@@ -77,15 +77,24 @@ for (const mode of ["settings", "data", "all"] as const)
 			await expect(
 				page.getByRole("button", { name: "Permanently initialize" }),
 			).toHaveCount(0);
+			const planningStarted = Date.now();
 			await page
 				.getByRole("button", {
 					name: "Stop App writers and review final targets",
 					exact: true,
 				})
 				.click();
+			await expect(page.getByRole("status")).toContainText(
+				"Stopping App writers",
+			);
 			await expect(
 				page.getByRole("heading", { name: "Final initialization targets" }),
-			).toBeVisible();
+				// This awaits actual external writer shutdown and Docker storage verification,
+				// not a DOM-only update. Record its duration rather than hiding stalled IPC.
+			).toBeVisible({ timeout: 30000 });
+			console.log(
+				`Final ${mode} planning completed in ${Date.now() - planningStarted}ms`,
+			);
 			const action = page.getByRole("button", {
 				name: "Permanently initialize",
 				exact: true,
@@ -126,14 +135,27 @@ for (const mode of ["settings", "data", "all"] as const)
 			).toHaveCount(0);
 			// Verify the real restart IPC invokes relaunch/quit without spawning an unmanaged test App.
 			if (mode === "settings") {
-				await app.evaluate(({ app: host }) => {
-					host.relaunch = () => {};
-				});
+				const relaunchEvidence = path.join(f.base, "relaunch-requested");
+				await app.evaluate(({ app: host }, file) => {
+					host.relaunch = () =>
+						process.getBuiltinModule("fs").writeFileSync(file, "relaunch");
+				}, relaunchEvidence);
 				const closed = app.waitForEvent("close");
-				await page
+				// Restart intentionally destroys this renderer. Wait for the close
+				// event, accepting a click rejection only when that event confirms it.
+				const click = page
 					.getByRole("button", { name: "Restart App", exact: true })
-					.click();
-				await closed;
+					.click()
+					.catch((error) => {
+						if (
+							!String(error).includes(
+								"Target page, context or browser has been closed",
+							)
+						)
+							throw error;
+					});
+				await Promise.all([closed, click]);
+				expect(await fs.readFile(relaunchEvidence, "utf8")).toBe("relaunch");
 			} else await app.close();
 			app = await f.launch();
 			page = await app.firstWindow();

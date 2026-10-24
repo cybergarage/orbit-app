@@ -7,13 +7,26 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Measured slow runner:20min before UI plus7.7min UI; retain all checks.
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: app
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: app
+      - name: Check out the pinned unpublished Core source
+        uses: actions/checkout@v4
+        with:
+          repository: cybergarage/orbit
+          ref: 7c5288b336315e7fd3eeee562b244e23a8498ad7
+          path: orbit
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: app/package-lock.json
       - name: Enable complete host handle inspection on the disposable runner
         # Docker overlay/netns mounts otherwise produce incomplete lsof output.
         # Keep the App fail-closed; grant only the inspector read/trace access.
@@ -21,7 +34,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lsof libcap2-bin
           sudo setcap cap_dac_read_search,cap_sys_ptrace+ep /usr/bin/lsof
-      - run: npm ci
+      - name: Verify the source pin and audited vendored artifact before installation
+        run: node scripts/prepare-local-core.mjs --verify-source ../orbit
+      - run: npm ci --ignore-scripts
+      # Run only these lock-pinned binary downloaders, not dependency hooks.
+      - name: Install the pinned Electron binary
+        run: node node_modules/electron/install.js
+      - name: Install the pinned SQLite binary
+        run: cd node_modules/better-sqlite3 && node ../prebuild-install/bin.js
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run worker:build
@@ -31,4 +51,4 @@ jobs:
       - run: npx playwright install-deps chromium
       - run: xvfb-run -a npx playwright test
       - name: Offline worker import and shell smoke check
-        run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --workdir /opt/worker --entrypoint node orbit-app-worker:core-0.9.3 --input-type=module -e "import {Agent} from '@cybergarage/orbit'; import {execFileSync} from 'node:child_process'; if(typeof Agent !== 'function')process.exit(1); console.log(execFileSync('bash',['-lc','echo worker-ready']).toString());"
+        run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --workdir /opt/worker --entrypoint node orbit-app-worker:project-memory-local --input-type=module -e "import {Agent} from '@cybergarage/orbit'; import {execFileSync} from 'node:child_process'; if(typeof Agent !== 'function')process.exit(1); console.log(execFileSync('bash',['-lc','echo worker-ready']).toString());"

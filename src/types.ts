@@ -7,6 +7,7 @@ export interface EventRecord {
 	data: any;
 }
 export interface DesktopSession {
+	archived?: boolean;
 	lastUserSubmission?: { at: number; sequence: number };
 	autoTitle?: {
 		stage: "new" | "pending" | "generating" | "done" | "failed" | "manual";
@@ -27,6 +28,7 @@ export interface DesktopSession {
 	answer?: string;
 }
 export interface Project {
+	archived?: boolean;
 	id: string;
 	name: string;
 	nameRevision?: number;

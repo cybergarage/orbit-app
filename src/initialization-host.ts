@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-// This pinned published module contains only the filesystem maintenance implementation.
+// This pinned local Core module contains only the filesystem maintenance implementation.
 // Bundling this module avoids loading provider/CLI/native SQLite code into Electron.
 import {
 	planInitialization,

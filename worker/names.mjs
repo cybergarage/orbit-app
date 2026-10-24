@@ -26,6 +26,28 @@ export async function names(
 	);
 	try {
 		switch (request.command) {
+			case "catalog-query":
+				return await catalog.query(request.query);
+			case "catalog-mutate":
+				return await catalog.mutate(request.operationId, request.mutation);
+			case "archive-project": {
+				const project = await catalog.query({
+					kind: "project",
+					id: request.projectId,
+				});
+				if (!project) throw new Error("Project missing");
+				return await catalog.mutate(request.operationId, {
+					kind: "update",
+					id: project.id,
+					expectedRevision: project.revision,
+					archived: request.archived,
+				});
+			}
+			case "archive-session":
+				return await repository.setArchived(
+					request.sessionId,
+					request.archived,
+				);
 			case "create-project":
 				return await projects.create({
 					name: request.name,

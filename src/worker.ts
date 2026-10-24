@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-export const image = "docker.io/library/orbit-app-worker:core-0.9.3";
+export const image = "docker.io/library/orbit-app-worker:project-memory-local";
 export const dockerPath =
 	process.platform === "darwin" ? "/usr/local/bin/docker" : "docker";
 export function workerUserArgs(

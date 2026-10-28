@@ -138,6 +138,13 @@ export class Worker {
 		private core: string,
 		private config: any,
 		private event: (data: any) => void,
+		private gateway?: {
+			request(
+				route: string,
+				body: unknown,
+				signal: AbortSignal,
+			): Promise<unknown>;
+		},
 	) {}
 	start(): Promise<void> {
 		if (this.stopping)
@@ -208,7 +215,19 @@ export class Worker {
 					? resolve()
 					: reject(Error(`Worker exited ${code}`));
 			});
-			this.send({ type: "start", config: this.config });
+			const { sessionId, requestId, projectContext, prompt, model, provider } =
+				this.config;
+			this.send({
+				type: "start",
+				config: {
+					sessionId,
+					requestId,
+					projectContext,
+					prompt,
+					model,
+					provider: provider ?? "ollama",
+				},
+			});
 		});
 	}
 	send(data: any) {
@@ -229,7 +248,7 @@ export class Worker {
 			typeof e.id !== "string" ||
 			!/^[a-f0-9-]{36}$/.test(e.id) ||
 			this.rpcIds.has(e.id) ||
-			!["chat", "show", "ps"].includes(e.route) ||
+			!this.allowedRoutes().includes(e.route) ||
 			++this.rpcCalls > 32 ||
 			this.rpcActive >= 2
 		) {
@@ -243,25 +262,43 @@ export class Worker {
 		this.rpcIds.add(e.id);
 		this.rpcActive++;
 		try {
-			if (e.route === "chat" && ++this.modelCalls > 9)
+			if (
+				["chat", "openai-chat", "anthropic-messages"].includes(e.route) &&
+				++this.modelCalls > 9
+			)
 				throw new Error("Model call budget exceeded");
-			const data = await modelRequest(
-				e.route,
-				e.body,
-				this.config.model,
-				this.controller.signal,
-			);
+			const data = this.gateway
+				? await this.gateway.request(e.route, e.body, this.controller.signal)
+				: await modelRequest(
+						e.route,
+						e.body,
+						this.config.model,
+						this.controller.signal,
+					);
 			this.send({ type: "rpc-result", id: e.id, data });
-		} catch (error) {
+		} catch {
 			if (this.controller.signal.aborted)
 				this.event({
 					type: "model-cancelled",
 					data: { rpcId: e.id, reason: "host cancellation" },
 				});
-			this.send({ type: "rpc-result", id: e.id, error: String(error) });
+			this.send({
+				type: "rpc-result",
+				id: e.id,
+				error: this.controller.signal.aborted
+					? "Worker cancelled"
+					: "Model request failed; check provider availability and credentials",
+			});
 		} finally {
 			this.rpcActive--;
 		}
+	}
+	private allowedRoutes(): string[] {
+		const provider = this.config.provider ?? "ollama";
+		if (provider === "openai") return ["openai-chat"];
+		if (provider === "anthropic")
+			return ["anthropic-messages", "anthropic-model"];
+		return provider === "ollama" ? ["chat", "show", "ps"] : [];
 	}
 	approve(id: unknown, approve: unknown) {
 		if (

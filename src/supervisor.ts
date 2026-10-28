@@ -1,3 +1,9 @@
+import {
+	CoreModelsHost,
+	requireCatalogSelection,
+	type ModelsHost,
+	type Selection,
+} from "./core-models";
 import type { KnowledgeExtractor } from "@cybergarage/orbit";
 import type { AcquireSources } from "./source-leases";
 import { ProjectKnowledge } from "./project-knowledge";
@@ -66,6 +72,7 @@ export class Supervisor {
 	private recoveryBlocked = false;
 	private reconciling?: Promise<void>;
 	private saveQueue = Promise.resolve();
+	private readonly modelSelectionVersions = new Map<string, number>();
 	private readonly operations = new Set<Promise<unknown>>();
 	constructor(
 		root: string,
@@ -75,12 +82,23 @@ export class Supervisor {
 			core: string,
 			config: any,
 			event: (e: any) => void,
-		) => new Worker(workspace, core, config, event),
+		) =>
+			new Worker(workspace, core, config, event, {
+				request: (route, body, signal) =>
+					this.models.request(
+						workspace,
+						{ provider: config.provider ?? "ollama", model: config.model },
+						route,
+						body,
+						signal,
+					),
+			}),
 		titleGenerator = generateTitle,
 		knowledgeOptions: {
 			acquire?: AcquireSources;
 			extract?: KnowledgeExtractor;
 		} = {},
+		private readonly models: ModelsHost = new CoreModelsHost(),
 	) {
 		this.store = new Store(root);
 		this.knowledge = new ProjectKnowledge(
@@ -219,32 +237,62 @@ export class Supervisor {
 			health.detail.push(String(e));
 		}
 		try {
-			const r = await fetch("http://127.0.0.1:11434/api/tags", {
-				signal: AbortSignal.timeout(3000),
-			});
-			if (!r.ok) throw new Error(`Ollama ${r.status}`);
-			const data = await r.json();
-			health.ollama = true;
-			health.models = data.models
-				.filter((m: any) => m.capabilities?.includes("tools"))
-				.map((m: any) => m.name);
-			if (!health.models.length)
-				for (const m of data.models) {
-					const show = await fetch("http://127.0.0.1:11434/api/show", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ model: m.name }),
-						signal: AbortSignal.timeout(3000),
-					});
-					if (show.ok && (await show.json()).capabilities?.includes("tools"))
-						health.models.push(m.name);
-				}
-		} catch (e) {
-			health.detail.push(String(e));
+			health.catalog = await this.catalog();
+			const local = health.catalog.providers.find(
+				(provider) => provider.provider === "ollama",
+			);
+			health.ollama =
+				local?.status === "available" || local?.status === "unsupported";
+			health.models = local?.models.map((model) => model.model) ?? [];
+			health.detail.push(
+				...health.catalog.providers
+					.filter(
+						(provider) =>
+							!["available", "unconfigured"].includes(provider.status),
+					)
+					.map(
+						(provider) =>
+							`${provider.label}: ${provider.message ?? "Unavailable"}`,
+					),
+			);
+		} catch {
+			health.detail.push(
+				"Model catalog unavailable; the bundled Core may need updating",
+			);
 		}
+
 		this.store.state.health = health;
 		await this.publish();
 		return health;
+	}
+	async catalog(projectId?: string, refresh = false, sessionId?: string) {
+		const project = projectId ? this.store.project(projectId) : undefined;
+		return this.models.catalog(
+			sessionId && projectId
+				? this.store.location(projectId, sessionId).workspace
+				: (project?.directory ??
+						(project ? this.store.workspace(project.id) : undefined)),
+			refresh,
+		);
+	}
+	private async validateModel(
+		selection: Selection,
+		projectId?: string,
+		health?: Health,
+		sessionId?: string,
+	) {
+		const current = health ?? (await this.health());
+		// Preserve the legacy Health injection boundary for deterministic local-worker fixtures.
+		// Production Health itself obtains these names exclusively from Core's catalog.
+		if (selection.provider === "ollama" && !current.catalog) {
+			if (!current.models.includes(selection.model))
+				throw new Error("Select an installed tool-capable model");
+			return;
+		}
+		requireCatalogSelection(
+			await this.catalog(projectId, true, sessionId),
+			selection,
+		);
 	}
 	async submit(p: any, scheduled = false) {
 		const execution = this.store.state.executions?.find(
@@ -263,6 +311,7 @@ export class Supervisor {
 			);
 		const prompt = text(p.prompt);
 		const model = text(p.model, 120);
+		const provider = text(p.provider ?? session.provider ?? "ollama", 80);
 		identifier(p.requestId);
 		if (
 			session.events.some(
@@ -311,7 +360,13 @@ export class Supervisor {
 			await this.knowledge.interrupt();
 			if (epoch !== this.epoch || this.closed || this.maintenance)
 				throw new Error("Submission cancelled");
-			await this.titles.provision(p.projectId, session, prompt, model);
+			await this.titles.provision(
+				p.projectId,
+				session,
+				prompt,
+				model,
+				provider === "ollama",
+			);
 			if (epoch !== this.epoch || this.closed || this.maintenance)
 				throw new Error("Submission cancelled");
 			const health = await this.health();
@@ -321,12 +376,20 @@ export class Supervisor {
 				throw new Error(
 					"Previous worker recovery is blocked; reconnect Docker first",
 				);
-			if (!health.docker || !health.ollama || !health.image)
+			if (
+				!health.docker ||
+				!health.image ||
+				(provider === "ollama" && !health.ollama)
+			)
 				throw new Error(
-					"Docker, worker image, and Ollama must be available. Check health and build the worker image.",
+					"Docker, worker image, and the selected provider must be available. Check status and build the worker image.",
 				);
-			if (!health.models.includes(model))
-				throw new Error("Select an installed tool-capable model");
+			await this.validateModel(
+				{ model, provider },
+				p.projectId,
+				health,
+				p.sessionId,
+			);
 			const workspace = await this.store.executionWorkspace(
 				p.projectId,
 				p.sessionId,
@@ -335,12 +398,13 @@ export class Supervisor {
 				throw new Error("Submission cancelled");
 			session.status = "starting";
 			session.model = model;
+			session.provider = provider;
 			if (execution) execution.status = "starting";
 			session.events.push({
 				id: randomUUID(),
 				type: "submission",
 				at: new Date().toISOString(),
-				data: { requestId: p.requestId, prompt, model },
+				data: { requestId: p.requestId, prompt, model, provider },
 			});
 			this.store.state.active = {
 				projectId: p.projectId,
@@ -368,6 +432,7 @@ export class Supervisor {
 						? `Project guidance (follow applicable workspace ORBIT.md / AGENTS.md instructions):\n${this.store.project(p.projectId).instructions}\n\nUser task:\n${prompt}`
 						: prompt,
 					model,
+					provider,
 				},
 				(e) => this.receiveEvent(run, e),
 			);
@@ -649,7 +714,7 @@ export class Supervisor {
 	}
 	private async dispatchCommand(commandName: string, p: any) {
 		if (
-			["move-session", "select-model", "rename-session"].includes(
+			["move-session", "rename-session"].includes(
 				commandName,
 			) &&
 			this.admittingSessionId === p.sessionId
@@ -663,6 +728,8 @@ export class Supervisor {
 			case "snapshot":
 				await this.store.refreshNames();
 				return structuredClone(this.store.state);
+			case "model-catalog":
+				return this.catalog(p.projectId, p.refresh === true, p.sessionId);
 			case "health":
 				return this.health();
 			case "create-project": {
@@ -680,10 +747,63 @@ export class Supervisor {
 				await this.publish();
 				return result;
 			}
+			case "default-model": {
+				const provider = text(p.provider, 80);
+				const model = text(p.model, 120);
+				const key = "default";
+				const revision = (this.modelSelectionVersions.get(key) ?? 0) + 1;
+				this.modelSelectionVersions.set(key, revision);
+				await this.validateModel({ model, provider });
+				if (this.modelSelectionVersions.get(key) !== revision)
+					throw new Error("Model selection superseded");
+				const previous = this.store.state.defaultModel;
+				this.store.state.defaultModel = { model, provider };
+				try {
+					await this.publish();
+				} catch (error) {
+					this.store.state.defaultModel = previous;
+					this.changed(structuredClone(this.store.state));
+					throw error;
+				}
+				return this.store.state.defaultModel;
+			}
 			case "select-model": {
-				const session = this.store.assertMovable(p.projectId, p.sessionId);
-				session.model = text(p.model, 120);
-				await this.publish();
+				const session = this.store.session(p.projectId, p.sessionId);
+				if (
+					["interrupted", "recovery-pending", "recovery-blocked"].includes(
+						session.status,
+					)
+				)
+					throw new Error("Recover the conversation before changing model");
+				const model = text(p.model, 120);
+				const provider = text(p.provider ?? session.provider ?? "ollama", 80);
+				const key = session.id;
+				const revision = (this.modelSelectionVersions.get(key) ?? 0) + 1;
+				this.modelSelectionVersions.set(key, revision);
+				await this.validateModel(
+					{ model, provider },
+					p.projectId,
+					undefined,
+					p.sessionId,
+				);
+				if (this.modelSelectionVersions.get(key) !== revision)
+					throw new Error("Model selection superseded");
+				if (
+					this.store.session(p.projectId, p.sessionId) !== session ||
+					(this.admittingSessionId === session.id && !this.worker)
+				)
+					throw new Error("Conversation changed during model selection");
+				const previous = { model: session.model, provider: session.provider };
+				session.model = model;
+				session.provider = provider;
+				try {
+					await this.publish();
+				} catch (error) {
+					session.model = previous.model;
+					session.provider = previous.provider;
+					this.changed(structuredClone(this.store.state));
+					throw error;
+				}
 				return session;
 			}
 			case "rename-project": {
@@ -807,6 +927,9 @@ export class Supervisor {
 					p.sessionId,
 					text(p.prompt),
 					text(p.model, 120),
+					...(p.provider && p.provider !== "ollama"
+						? [text(p.provider, 80)]
+						: []),
 					p.timing ?? [p.nextAt, p.intervalMs],
 				]);
 				if (!existing && p.operationId) {
@@ -851,6 +974,7 @@ export class Supervisor {
 					sessionId: p.sessionId,
 					prompt: text(p.prompt),
 					model: text(p.model, 120),
+					provider: text(p.provider ?? "ollama", 80),
 					nextAt: Number(at),
 					intervalMs: interval,
 					enabled: existing?.enabled ?? true,
@@ -937,6 +1061,7 @@ export class Supervisor {
 				startedAt: now,
 				prompt: s.prompt,
 				model: s.model,
+				provider: s.provider ?? "ollama",
 				status: "starting",
 				events: [] as any[],
 			};
@@ -958,6 +1083,7 @@ export class Supervisor {
 						sessionId: execution.sessionId,
 						prompt: execution.prompt,
 						model: execution.model,
+						provider: execution.provider ?? "ollama",
 						requestId: execution.requestId,
 					},
 					true,

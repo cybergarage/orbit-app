@@ -1,3 +1,4 @@
+import { localFixtureModels } from "./fixtures/local-models";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -101,6 +102,7 @@ test("real Supervisor, source helpers and disposable workers automatically reuse
 				throw new Error("No title inference");
 			},
 			{ extract },
+			localFixtureModels(),
 		);
 	let stage = "initialize";
 	let sup = create();

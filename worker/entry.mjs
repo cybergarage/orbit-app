@@ -9,9 +9,9 @@ import {
 	State,
 	MemorySessionLogStore,
 	createModelContextPolicy,
-    parseProjectContext,
+	parseProjectContext,
 } from "@cybergarage/orbit";
-import { OllamaAgent } from "@cybergarage/orbit/dist/core/models/adapters/ollama.js";
+import { createWorkerModel } from "./models.mjs";
 const emit = (type, data) =>
 	process.stdout.write(`${JSON.stringify({ type, data })}\n`);
 const pending = new Map();
@@ -88,24 +88,15 @@ async function run(config) {
 					formatVersion: 3,
 					cwd: "/workspace",
 					model: config.model,
-					provider: "ollama",
+					provider: config.provider ?? "ollama",
 					originator: "orbit-app",
 				});
-		const model = new OllamaAgent(
-			config.model,
-			{ getName: () => "ollama", getContextWindow: () => 8192 },
-			{
-				client: {
-					chat: (request) => rpc("chat", request),
-					ps: () => rpc("ps"),
-					show: (request) => rpc("show", request),
-					abort: () => {
-						for (const p of pending.values()) p.reject(Error("Cancelled"));
-						pending.clear();
-					},
-				},
-			},
-		);
+		if (typeof session.selectModel === "function")
+			session.selectModel({
+				model: config.model,
+				provider: config.provider ?? "ollama",
+			});
+		const model = createWorkerModel(config, rpc);
 		const contextPolicy = await createModelContextPolicy(model, {
 			outputReserve: 1024,
 		});
@@ -114,9 +105,15 @@ async function run(config) {
 			state: new State(session),
 			deps: { createModel: () => model },
 			contextPolicy,
-            ...(config.projectContext ? {projectMemory: {prepare: async () => parseProjectContext(config.projectContext)}} : {}),
+			...(config.projectContext
+				? {
+						projectMemory: {
+							prepare: async () => parseProjectContext(config.projectContext),
+						},
+					}
+				: {}),
 			settings: {
-				provider: "ollama",
+				provider: config.provider ?? "ollama",
 				model: config.model,
 				tools: { profile: "coding" },
 				mcp: { servers: {} },
@@ -151,7 +148,7 @@ async function run(config) {
 			[new Message("user", { content: config.prompt })],
 			{
 				requestId: config.requestId,
-                ...(config.projectContext ? {memory: {mode: "automatic"}} : {}),
+				...(config.projectContext ? { memory: { mode: "automatic" } } : {}),
 				maxToolIterations: 8,
 				onEvent: (event) => emit("agent-event", event),
 				onRunSnapshot: (snapshot) => emit("run", snapshot),

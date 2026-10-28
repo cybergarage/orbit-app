@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: cybergarage/orbit
-          ref: 7c5288b336315e7fd3eeee562b244e23a8498ad7
+          ref: c257b718623a3a0baa2021110517e719e81105d6
           path: orbit
       - uses: actions/setup-node@v4
         with:
@@ -51,4 +51,4 @@ jobs:
       - run: npx playwright install-deps chromium
       - run: xvfb-run -a npx playwright test
       - name: Offline worker import and shell smoke check
-        run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --workdir /opt/worker --entrypoint node orbit-app-worker:project-memory-local --input-type=module -e "import {Agent} from '@cybergarage/orbit'; import {execFileSync} from 'node:child_process'; if(typeof Agent !== 'function')process.exit(1); console.log(execFileSync('bash',['-lc','echo worker-ready']).toString());"
+        run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --workdir /opt/worker --entrypoint node orbit-app-worker:project-memory-local --input-type=module -e "import {Agent,ModelCatalog,ModelGateway} from '@cybergarage/orbit'; import {execFileSync} from 'node:child_process'; if([Agent,ModelCatalog,ModelGateway].some(api=>typeof api !== 'function'))process.exit(1); console.log(execFileSync('bash',['-lc','echo worker-ready']).toString());"

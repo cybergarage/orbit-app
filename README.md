@@ -74,3 +74,12 @@ See [verification and security limitations](docs/verification.md) for tested beh
 Chats within each Project and the unassigned Chats group follow accepted user submissions, newest first. Typing, viewing, responses, names and scheduled work do not affect this order. Rejected requests do not move Chats; failures after acceptance keep their position. Order survives restart and project moves. Older Chats without explicit submission ordering retain their relative saved order until their next user submission; historical submissions have no reliable human/schedule origin and are not inferred. Project order is unchanged.
 
 Settings → Initialization supports settings-only, saved-data, and settings/data/dedicated-cache initialization through the pinned local Orbit Core maintenance API. Each flow previews exact App-owned targets, stops and verifies writers, creates a final metadata plan, and requires explicit permanent confirmation and external exclusive-control declarations. Working files, external workspaces, shared context, unknown objects and browser profile data remain outside the allowlist. Incomplete initialization stays offline across restart; success requires restart. See [scope, ownership and failure behavior](docs/initialization-adoption.md).
+
+Model choices come from Core's credential-aware provider catalog: choose Ollama,
+Claude (Anthropic), or OpenAI together with a compatible available model in one list. Read-only Models
+API verification is not an inference/billing check. Keys stay on the host; workers
+use the selected real adapter through constrained RPC. Settings defaults apply to
+new chats; existing choices and admitted runs remain isolated. No models are downloaded.
+The bundled Core includes ModelCatalog and ModelGateway. Its exact clean source
+commit and artifact hash are recorded in worker/packages/core-artifact.json;
+host and worker locks and the CI source checkout use that same artifact/pin.

@@ -1,3 +1,4 @@
+import { ModelSelector } from "./model-selector";
 import { KnowledgePanel } from "./knowledge-panel";
 import { InitializationSettings } from "./initialization-settings";
 import { orderedChats } from "./chat-order";
@@ -214,6 +215,7 @@ function App() {
 	const [sessionId, setSession] = useState("");
 	const [prompt, setPrompt] = useState("");
 	const [model, setModel] = useState("");
+	const [provider, setProvider] = useState("");
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [form, setForm] = useState({
@@ -283,7 +285,13 @@ function App() {
 	const project = state.projects.find((p) => p.id === projectId);
 	const session = project?.sessions.find((s) => s.id === sessionId);
 	const chosenModel = model || session?.model || "";
-	const selectedModel = chosenModel || state.health?.models[0] || "";
+	const selectedModel =
+		chosenModel || state.defaultModel?.model || state.health?.models[0] || "";
+	const selectedProvider =
+		provider ||
+		(session?.model
+			? (session.provider ?? "ollama")
+			: (state.defaultModel?.provider ?? "ollama"));
 	const active = !!state.active;
 	const pending =
 		session?.status === "awaiting-approval" &&
@@ -318,6 +326,7 @@ function App() {
 				: "",
 		);
 		setModel("");
+		setProvider("");
 	}
 	function newProject() {
 		setEditing("");
@@ -373,6 +382,7 @@ function App() {
 				sessionId: s,
 				prompt: taskInput,
 				model: selectedModel,
+				provider: selectedProvider,
 				requestId: crypto.randomUUID(),
 			});
 			setPrompt("");
@@ -407,8 +417,19 @@ function App() {
 				Boolean,
 			).length
 		: undefined;
+	const activeModel = session?.events.findLast(
+		(event) => event.type === "submission",
+	)?.data.model;
 	const composer = (
 		<div className="composer">
+			{active &&
+				activeModel &&
+				(activeModel !== selectedModel ||
+					(lastSubmission?.data.provider ?? "ollama") !== selectedProvider) && (
+					<small className="model-next-turn" role="status">
+						Model change saved · Applies to the next turn
+					</small>
+				)}
 			<textarea
 				aria-label="Task"
 				value={taskInput}
@@ -417,35 +438,31 @@ function App() {
 				maxLength={12000}
 			/>
 			<div>
-				<label>
-					Model{" "}
-					<select
-						aria-label="Model"
-						value={selectedModel}
-						disabled={active || busy}
-						onChange={(e) => {
-							setModel(e.target.value);
-							if (session)
-								void action(() =>
-									window.orbit.call("select-model", {
-										projectId,
-										sessionId,
-										model: e.target.value,
-									}),
-								);
-						}}
-					>
-						<option value="">Select an installed model</option>
-						{[
-							...new Set([
-								...(state.health?.models ?? []),
-								...(chosenModel ? [chosenModel] : []),
-							]),
-						].map((m) => (
-							<option key={m}>{m}</option>
-						))}
-					</select>
-				</label>
+				<ModelSelector
+					key={sessionId || "draft"}
+					disabled={busy}
+					value={{ model: selectedModel, provider: selectedProvider }}
+					load={(refresh) =>
+						window.orbit.call("model-catalog", {
+							projectId: projectId || undefined,
+							sessionId: sessionId || undefined,
+							refresh,
+						})
+					}
+					save={async (choice) => {
+						if (session)
+							await window.orbit.call("select-model", {
+								projectId,
+								sessionId,
+								model: choice.model,
+								provider: choice.provider,
+							});
+						else {
+							setModel(choice.model);
+							setProvider(choice.provider);
+						}
+					}}
+				/>
 				{active || busy ? (
 					<button
 						type="button"
@@ -546,6 +563,21 @@ function App() {
 				(view === "settings" && settingsCategory === "status")) && (
 				<section className="page status-page">
 					<h1>Status</h1>
+					<div className="card model-settings default-model-card">
+						<span title="Used for new chats. Existing chats keep their selected model.">
+							Default model
+						</span>
+						<ModelSelector
+							label="Default model"
+							value={state.defaultModel}
+							load={(refresh) =>
+								window.orbit.call("model-catalog", { refresh })
+							}
+							save={async (choice) => {
+								await window.orbit.call("default-model", choice);
+							}}
+						/>
+					</div>
 					<p>
 						Local execution environment. Model selection is saved for each
 						conversation.
@@ -805,7 +837,16 @@ function App() {
 					model={selectedModel}
 					models={Array.from(
 						new Set([
-							...(state.health?.models ?? []),
+							...(state.health?.catalog?.providers
+								.find(
+									(provider) =>
+										provider.provider ===
+										(editingSchedule?.provider ?? selectedProvider),
+								)
+								?.models.map((model) => model.model) ??
+								(selectedProvider === "ollama"
+									? (state.health?.models ?? [])
+									: [])),
 							...(selectedModel ? [selectedModel] : []),
 						]),
 					)}
@@ -826,6 +867,7 @@ function App() {
 							editingSchedule ? "update-schedule" : "schedule",
 							{
 								...value,
+								provider: editingSchedule?.provider ?? selectedProvider,
 								id: editingSchedule?.id,
 								projectId: p,
 								sessionId: id,
@@ -1244,6 +1286,7 @@ function App() {
 								setSession("");
 								setPrompt("");
 								setModel("");
+								setProvider("");
 								setView("home");
 							}}
 						>

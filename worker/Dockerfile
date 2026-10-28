@@ -5,7 +5,7 @@ COPY packages ./packages
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 # Install only the lock-pinned SQLite binary; do not run arbitrary dependency hooks.
 RUN cd node_modules/better-sqlite3 && node ../prebuild-install/bin.js
-COPY entry.mjs policy.mjs names.mjs maintenance.mjs sources.mjs ./
+COPY entry.mjs models.mjs policy.mjs names.mjs maintenance.mjs sources.mjs ./
 ENV HOME=/tmp/worker-home
 USER node
 WORKDIR /workspace

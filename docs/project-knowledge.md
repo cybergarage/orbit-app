@@ -167,20 +167,20 @@ late-target tests, and restart/switch/partial-edit UI in `test/ui/knowledge.spec
 
 ## Pull request dependency and clean-checkout reproduction
 
-This draft integration depends on Core source commit
-`7c5288b336315e7fd3eeee562b244e23a8498ad7` in
-`https://github.com/cybergarage/orbit.git` (Core PR #19). It uses no nonexistent
+This integration uses Core source commit
+`c257b718623a3a0baa2021110517e719e81105d6` in
+`https://github.com/cybergarage/orbit.git` (including Project knowledge and conversation model selection). It uses no nonexistent
 published version. The exact audited `0.9.3-project-memory.0` tarball is committed
 under `worker/packages/`; its source and SHA-256 are recorded beside it. Both
 lockfiles use this same relative file, so a fresh checkout runs `npm ci` directly,
 then `npm run worker:build` and normal checks, without a local Core checkout.
 
 CI separately checks out the pinned Core source and verifies that clean revision
-and the included artifact hash before installation. The reviewed artifact has479
+and the included artifact hash before installation. The reviewed artifact has 494
 source/distribution files; inspection found no credential patterns, private
 machine paths, session/database files or user data. It is an intentional package
 dependency, not a backup or public release. SHA-256:
-`17bb8964c7df8540c3e10f40331f8f98ddb53e7e2db35a6921f3129eb68e6eb2`.
+`288a62406a66c5194ca3014f3161bd9d1cf3b895ea030e3601e443345ddba837`.
 
 Source rebuild remains available with `npm run core:prepare -- <path>`
 on an explicitly selected clean macOS/Linux checkout (`/usr/bin/git`). npm supplies

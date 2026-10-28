@@ -1,3 +1,4 @@
+import { localFixtureModels } from "./local-models";
 import { installBackgroundWindows } from "../../src/background-windows";
 import { app, BrowserWindow, ipcMain } from "electron";
 import path from "node:path";
@@ -136,6 +137,7 @@ async function start() {
 			throw new Error("No title model in synthetic UI fixture");
 		},
 		{ extract },
+		localFixtureModels(),
 	);
 	await supervisor.init();
 	supervisor.health = async () => {

@@ -87,6 +87,18 @@ export class Store {
 		} catch (error: any) {
 			if (error.code !== "ENOENT") throw error;
 		}
+		if (Object.hasOwn(this.preferences, "defaultModel"))
+			this.state.defaultModel = this.preferences
+				.defaultModel as Snapshot["defaultModel"];
+		if (
+			this.state.defaultModel &&
+			(!["ollama", "anthropic", "openai"].includes(
+				this.state.defaultModel.provider,
+			) ||
+				typeof this.state.defaultModel.model !== "string" ||
+				!this.state.defaultModel.model.trim())
+		)
+			throw new Error("Invalid saved default model");
 		if (Object.hasOwn(this.preferences, "appearance"))
 			this.state.appearance = this.preferences
 				.appearance as Snapshot["appearance"];
@@ -186,6 +198,7 @@ export class Store {
 		const preferences = JSON.stringify({
 			...this.preferences,
 			appearance: this.state.appearance ?? "system",
+			defaultModel: this.state.defaultModel,
 		});
 		const health = this.state.health
 			? JSON.stringify(this.state.health)
@@ -193,6 +206,7 @@ export class Store {
 		const {
 			maintenance: _maintenance,
 			appearance: _appearance,
+			defaultModel: _defaultModel,
 			health: _health,
 			...savedData
 		} = this.state;
@@ -390,6 +404,12 @@ export class Store {
 	async createSession(projectId: unknown) {
 		const p = this.project(projectId);
 		const s: DesktopSession = {
+			...(this.state.defaultModel
+				? {
+						model: this.state.defaultModel.model,
+						provider: this.state.defaultModel.provider,
+					}
+				: {}),
 			id: randomUUID(),
 			name: `Chat ${p.sessions.length + 1}`,
 			autoTitle: { stage: "new", generation: 0 },

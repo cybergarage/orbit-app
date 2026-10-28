@@ -1,3 +1,4 @@
+import type { ProviderCatalog } from "./core-models";
 import type { SchedulePlan } from "./scheduling";
 export interface EventRecord {
 	requestId?: string;
@@ -23,6 +24,7 @@ export interface DesktopSession {
 	storageProjectId?: string;
 	workspace?: string;
 	model?: string;
+	provider?: string;
 	events: EventRecord[];
 	status: string;
 	answer?: string;
@@ -46,6 +48,7 @@ export interface Schedule {
 	sessionId: string;
 	prompt: string;
 	model: string;
+	provider?: string;
 	nextAt: number;
 	intervalMs: number;
 	enabled: boolean;
@@ -63,11 +66,13 @@ export interface Execution {
 	endedAt?: number;
 	prompt: string;
 	model: string;
+	provider?: string;
 	status: string;
 	answer?: string;
 	events: EventRecord[];
 }
 export interface Snapshot {
+	defaultModel?: { model: string; provider: string };
 	maintenance?: { error?: string; complete: boolean };
 	submissionSequence?: number;
 	appearance?: "system" | "light" | "dark";
@@ -80,6 +85,7 @@ export interface Snapshot {
 	recoveryBlocked?: boolean;
 }
 export interface Health {
+	catalog?: ProviderCatalog;
 	checkedAt?: number;
 	docker: boolean;
 	ollama: boolean;

@@ -200,6 +200,12 @@ test("unknown data refuses reset, shows failure and stays offline after restart"
 				exact: true,
 			})
 			.click();
+		// Writer shutdown includes real Docker verification. Await that operation
+		// with the same bound as successful final planning before checking its error.
+		await expect(page.getByRole("status")).toContainText(
+			"App writers remain stopped",
+			{ timeout: 30000 },
+		);
 		await expect(page.getByRole("alert")).toContainText(
 			"Unknown object retained",
 		);

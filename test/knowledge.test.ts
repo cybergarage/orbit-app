@@ -6,7 +6,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { ContainerCoreNames } from "../src/core-names";
 import { Supervisor } from "../src/supervisor";
-import { command, dockerPath } from "../src/worker";
+import { command, dockerPath, modelRequest } from "../src/worker";
 import { acquireContainerSources } from "../src/source-leases";
 
 async function until<T>(
@@ -101,6 +101,30 @@ test("real Supervisor, source helpers and disposable workers automatically reuse
 				throw new Error("No title inference");
 			},
 			{ extract },
+			{
+				catalog: async () => ({
+					checkedAt: Date.now(),
+					expiresAt: Date.now() + 30000,
+					providers: [
+						{
+							provider: "ollama",
+							label: "Ollama",
+							status: "available",
+							credential: "not-required",
+							models: [
+								{
+									provider: "ollama",
+									model: "gemma4:12b",
+									label: "gemma4:12b",
+									tools: true,
+								},
+							],
+						},
+					],
+				}),
+				request: async (_cwd, selection, route, body, signal) =>
+					modelRequest(route, body, selection.model, signal),
+			},
 		);
 	let stage = "initialize";
 	let sup = create();

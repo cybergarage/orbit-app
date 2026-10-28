@@ -71,13 +71,31 @@ test("approved appearance, compact folders and schedule creation/editing preserv
 				name: "A long project name for readable compact navigation",
 			});
 			const s = await window.orbit.call("create-session", { projectId: p.id });
-			await window.orbit.call("select-model", {
-				projectId: p.id,
-				sessionId: s.id,
-				model: "deliberately-uninstalled-ui-fixture",
-			});
+			let rejected = false;
+			try {
+				await window.orbit.call("select-model", {
+					projectId: p.id,
+					sessionId: s.id,
+					model: "deliberately-uninstalled-ui-fixture",
+				});
+			} catch {
+				rejected = true;
+			}
+			if (!rejected)
+				throw new Error("Unavailable model selection was accepted");
 			return { p: p.id, s: s.id };
 		});
+		// Simulate a previously selected model that disappeared between launches.
+		await app.close();
+		const stateFile = path.join(root, "registry", "state.json");
+		const persisted = JSON.parse(await fs.readFile(stateFile, "utf8"));
+		persisted.projects
+			.find((project: any) => project.id === ids.p)
+			.sessions.find((session: any) => session.id === ids.s).model =
+			"deliberately-uninstalled-ui-fixture";
+		await fs.writeFile(stateFile, JSON.stringify(persisted));
+		app = await launch();
+		page = await app.firstWindow();
 		const project = page.getByRole("button", {
 			name: "Project A long project name for readable compact navigation",
 			exact: true,

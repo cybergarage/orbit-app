@@ -63,6 +63,7 @@ export class AutoTitles {
 		session: DesktopSession,
 		prompt: string,
 		model: string,
+		allowGeneration = true,
 	) {
 		const job = session.autoTitle;
 		if (job?.stage !== "new") return;
@@ -78,11 +79,11 @@ export class AutoTitles {
 			});
 			if (job.stage !== "new" || job.generation !== generation) return;
 			Object.assign(job, {
-				stage: "pending",
+				stage: allowGeneration ? "pending" : "done",
 				generation: job.generation + 1,
 				revision: session.nameRevision,
 				prompt: prompt.slice(0, 1000),
-				model,
+				model: allowGeneration ? model : undefined,
 				operationId: randomUUID(),
 			});
 			await this.changed();

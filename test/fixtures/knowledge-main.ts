@@ -3,6 +3,7 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import path from "node:path";
 import { ContainerCoreNames } from "../../src/core-names";
 import { Supervisor } from "../../src/supervisor";
+import { modelRequest } from "../../src/worker";
 const root = process.env.ORBIT_KNOWLEDGE_ROOT;
 const dist = process.env.ORBIT_KNOWLEDGE_DIST;
 if (!root || !dist)
@@ -136,6 +137,30 @@ async function start() {
 			throw new Error("No title model in synthetic UI fixture");
 		},
 		{ extract },
+		{
+			catalog: async () => ({
+				checkedAt: Date.now(),
+				expiresAt: Date.now() + 30000,
+				providers: [
+					{
+						provider: "ollama",
+						label: "Ollama",
+						status: "available",
+						credential: "not-required",
+						models: [
+							{
+								provider: "ollama",
+								model: "gemma4:12b",
+								label: "gemma4:12b",
+								tools: true,
+							},
+						],
+					},
+				],
+			}),
+			request: async (_cwd, selection, route, body, signal) =>
+				modelRequest(route, body, selection.model, signal),
+		},
 	);
 	await supervisor.init();
 	supervisor.health = async () => {

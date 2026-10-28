@@ -1,9 +1,9 @@
 {
   "version": "0.9.3-project-memory.0",
   "file": "cybergarage-orbit-0.9.3-project-memory.0.tgz",
-  "sha256": "17bb8964c7df8540c3e10f40331f8f98ddb53e7e2db35a6921f3129eb68e6eb2",
+  "sha256": "288a62406a66c5194ca3014f3161bd9d1cf3b895ea030e3601e443345ddba837",
   "source": {
     "repository": "https://github.com/cybergarage/orbit.git",
-    "commit": "7c5288b336315e7fd3eeee562b244e23a8498ad7"
+    "commit": "c257b718623a3a0baa2021110517e719e81105d6"
   }
 }

@@ -143,7 +143,11 @@ test("live existing-image runtime, inference, actual worker cancel/retry and mov
 		await page
 			.getByRole("button", { name: "Project Live source", exact: true })
 			.click();
-		await page.getByLabel("Model", { exact: true }).selectOption("gemma4:12b");
+		await page.getByRole("button", { name: "Model", exact: true }).click();
+		await page
+			.getByRole("dialog", { name: "Model", exact: true })
+			.getByRole("button", { name: /gemma4:12b/ })
+			.click();
 		const marker = "MAPLE-6382";
 		await page
 			.getByLabel("Task", { exact: true })

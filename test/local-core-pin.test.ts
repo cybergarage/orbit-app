@@ -45,6 +45,14 @@ test("unpublished Core source, artifact and CI checkout use the same explicit pi
 		host.packages["node_modules/@cybergarage/orbit"].integrity,
 		worker.packages["node_modules/@cybergarage/orbit"].integrity,
 	);
+	assert.equal(
+		host.packages["node_modules/@cybergarage/orbit"].integrity,
+		`sha512-${createHash("sha512").update(artifact).digest("base64")}`,
+	);
+	assert.equal(
+		host.packages["node_modules/@cybergarage/orbit"].version,
+		metadata.version,
+	);
 	const rejected = spawnSync(
 		process.execPath,
 		["scripts/prepare-local-core.mjs", "--verify-source", "."],

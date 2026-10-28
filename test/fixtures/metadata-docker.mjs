@@ -3,7 +3,13 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 const [file, verb, ...args] = process.argv.slice(2);
 const read = () => JSON.parse(fs.readFileSync(file, "utf8"));
-const write = (state) => fs.writeFileSync(file, JSON.stringify(state));
+const write = (state) => {
+	// The test polls concurrently with this child process. Publish complete
+	// snapshots so a reader cannot observe writeFileSync's truncation window.
+	const pending = `${file}.${process.pid}.pending`;
+	fs.writeFileSync(pending, JSON.stringify(state));
+	fs.renameSync(pending, file);
+};
 if (verb === "writer") {
 	setInterval(() => {}, 1000);
 } else {

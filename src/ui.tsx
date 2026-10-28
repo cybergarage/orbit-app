@@ -563,7 +563,7 @@ function App() {
 				(view === "settings" && settingsCategory === "status")) && (
 				<section className="page status-page">
 					<h1>Status</h1>
-					<div className="model-settings">
+					<div className="card model-settings default-model-card">
 						<span title="Used for new chats. Existing chats keep their selected model.">
 							Default model
 						</span>

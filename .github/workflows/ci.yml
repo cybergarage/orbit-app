@@ -45,6 +45,8 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run worker:build
+      - name: Verify the workspace-only Docker runner with generated files
+        run: node --import tsx scripts/workspace-docker-smoke.ts
       # Host-wide lsof inspection must not race other fixture Docker mounts.
       - run: npm test
       - run: npm run build

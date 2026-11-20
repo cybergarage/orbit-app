@@ -83,3 +83,22 @@ new chats; existing choices and admitted runs remain isolated. No models are dow
 The bundled Core includes ModelCatalog and ModelGateway. Its exact clean source
 commit and artifact hash are recorded in worker/packages/core-artifact.json;
 host and worker locks and the CI source checkout use that same artifact/pin.
+
+### Workspace-only execution boundary (development)
+
+The workspace-only request encoder and Docker argument plan are groundwork for
+hosting Core's Agent in Electron. They are not called by the App and do not
+install or launch a workspace executor. Existing profiles, Docker workers, and
+the pinned Core artifact are unchanged.
+
+The intended caller must bind the execution to a canonical App-approved
+workspace. Core authorizes and journals the operation on the host. The encoder
+translates only the approved working directory and target into `/workspace`,
+rejects requests outside that root, and preserves the Core mutation digests.
+The launch plan mounts the selected workspace only, with the existing isolation
+flags and no session, Project catalog or credential mount.
+
+Before wiring this into a run, implement the workspace-only image and protocol,
+validate each target and mutation digest inside the container, and confirm
+cancellation and ambiguous settlement with real Docker. A failure must never
+reroute the operation to the host. This slice does not migrate existing profiles.

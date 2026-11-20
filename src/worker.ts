@@ -16,7 +16,7 @@ export function workerUserArgs(
 		throw new Error("Linux workers require a non-root host user");
 	return ["--user", `${uid}:${gid}`];
 }
-export function dockerArgs(name: string, workspace: string, core: string) {
+function dockerIsolationArgs(name: string, label: string) {
 	return [
 		"run",
 		"--rm",
@@ -25,7 +25,7 @@ export function dockerArgs(name: string, workspace: string, core: string) {
 		"--name",
 		name,
 		"--label",
-		`org.cybergarage.orbit-app.workspace=${workspace}`,
+		label,
 		"--ulimit",
 		"fsize=67108864:67108864",
 		"--network",
@@ -43,12 +43,41 @@ export function dockerArgs(name: string, workspace: string, core: string) {
 		"2",
 		"--tmpfs",
 		"/tmp:rw,noexec,nosuid,size=256m",
+	];
+}
+export function dockerArgs(name: string, workspace: string, core: string) {
+	return [
+		...dockerIsolationArgs(
+			name,
+			`org.cybergarage.orbit-app.workspace=${workspace}`,
+		),
 		"--mount",
 		`type=bind,src=${workspace},dst=/workspace`,
 		"--mount",
 		`type=bind,src=${core},dst=/state`,
 		...workerUserArgs(),
 		image,
+	];
+}
+/** Plan only. The isolated workspace executor image is not built or launched yet. */
+export function dockerWorkspaceArgs(name: string, workspace: string) {
+	if (!/^orbit-app-workspace-[a-f0-9-]{36}$/.test(name))
+		throw new Error("Invalid workspace worker name");
+	if (
+		!path.isAbsolute(workspace) ||
+		path.resolve(workspace) !== workspace ||
+		path.parse(workspace).root === workspace ||
+		/[,\r\n\0]/.test(workspace)
+	)
+		throw new Error("Invalid workspace mount path");
+	return [
+		...dockerIsolationArgs(name, "org.cybergarage.orbit-app.role=workspace"),
+		"--mount",
+		`type=bind,src=${workspace},dst=/workspace`,
+		"--workdir",
+		"/workspace",
+		...workerUserArgs(),
+		"docker.io/library/orbit-app-workspace:local",
 	];
 }
 export function command(

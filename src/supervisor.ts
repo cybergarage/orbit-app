@@ -20,6 +20,7 @@ import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { Store, text, identifier, assertAppProfileRoot } from "./store";
 import {
+	stopWorkerWorkspaceMutation,
 	Worker,
 	command,
 	dockerPath,
@@ -171,6 +172,8 @@ export class Supervisor {
 			if (a.containerName) {
 				if (!/^orbit-app-[a-f0-9-]{36}$/.test(a.containerName))
 					throw new Error("Invalid saved worker identity");
+				if (a.workspaceMutations === true)
+					await stopWorkerWorkspaceMutation(a.containerName);
 				const containers = await command(dockerPath, [
 					"ps",
 					"-a",
@@ -428,6 +431,8 @@ export class Supervisor {
 					sessionId: p.sessionId,
 					requestId: p.requestId,
 					projectContext,
+					workspaceMutations:
+						process.env.ORBIT_APP_DOCKER_WORKSPACE_MUTATIONS === "1",
 					prompt: this.store.project(p.projectId).instructions
 						? `Project guidance (follow applicable workspace ORBIT.md / AGENTS.md instructions):\n${this.store.project(p.projectId).instructions}\n\nUser task:\n${prompt}`
 						: prompt,
@@ -437,8 +442,11 @@ export class Supervisor {
 				(e) => this.receiveEvent(run, e),
 			);
 			this.worker = worker;
-			if (this.store.state.active)
+			if (this.store.state.active) {
 				this.store.state.active.containerName = worker.name;
+				if (worker.workspaceMutationsEnabled)
+					this.store.state.active.workspaceMutations = true;
+			}
 			await this.publish();
 			if (epoch !== this.epoch || this.closed || this.maintenance) {
 				await worker.stop();
@@ -714,9 +722,7 @@ export class Supervisor {
 	}
 	private async dispatchCommand(commandName: string, p: any) {
 		if (
-			["move-session", "rename-session"].includes(
-				commandName,
-			) &&
+			["move-session", "rename-session"].includes(commandName) &&
 			this.admittingSessionId === p.sessionId
 		)
 			throw new Error("Running or recovery-pending sessions cannot be changed");

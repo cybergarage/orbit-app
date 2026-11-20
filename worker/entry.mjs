@@ -1,3 +1,4 @@
+import { createWorkspaceMutationExecutor } from "./workspace-mutation-executor.mjs";
 import { decideOperation } from "./policy.mjs";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
@@ -19,11 +20,34 @@ let agent,
 	handle,
 	started = false;
 let connectionLost = false;
-function rpc(route, body) {
+function rpc(route, body, signal) {
 	if (connectionLost) return Promise.reject(Error("Host connection lost"));
+	if (signal?.aborted) return Promise.reject(signal.reason);
 	const id = randomUUID();
-	process.stdout.write(`${JSON.stringify({ type: "rpc", id, route, body })}\n`);
-	return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+	return new Promise((resolve, reject) => {
+		const cancel = () => {
+			process.stdout.write(
+				`${JSON.stringify({ type: "mutation-cancel", id })}\n`,
+			);
+			pending.delete(id);
+			reject(signal.reason);
+		};
+		const cleanup = () => signal?.removeEventListener("abort", cancel);
+		pending.set(id, {
+			resolve: (value) => {
+				cleanup();
+				resolve(value);
+			},
+			reject: (error) => {
+				cleanup();
+				reject(error);
+			},
+		});
+		signal?.addEventListener("abort", cancel, { once: true });
+		process.stdout.write(
+			`${JSON.stringify({ type: "rpc", id, route, body })}\n`,
+		);
+	});
 }
 for (const signal of ["SIGTERM", "SIGINT"])
 	process.on(signal, () => {
@@ -69,6 +93,8 @@ lines.on("close", () => {
 });
 async function run(config) {
 	let session;
+	let retainedMutationGuard = false;
+	let mutationUncertain = false;
 	try {
 		const repo = new SessionRepository({
 			rootDir: "/state/sessions",
@@ -100,6 +126,17 @@ async function run(config) {
 		const contextPolicy = await createModelContextPolicy(model, {
 			outputReserve: 1024,
 		});
+		const workspaceExecutor =
+			config.workspaceMutations === true
+				? await createWorkspaceMutationExecutor(async (route, body, signal) => {
+						try {
+							return await rpc(route, body, signal);
+						} catch (error) {
+							mutationUncertain = true;
+							throw error;
+						}
+					})
+				: undefined;
 		agent = new Agent({
 			cwd: "/workspace",
 			state: new State(session),
@@ -121,6 +158,7 @@ async function run(config) {
 			logStore: new MemorySessionLogStore(),
 			toolProfile: "coding",
 			execution: {
+				...(workspaceExecutor ? { workspaceExecutor } : {}),
 				journalLevel: "file-and-directory-sync",
 				journalRoot: "/state/runs",
 				responderScope: "desktop-owner",
@@ -155,6 +193,9 @@ async function run(config) {
 			},
 		);
 		const runtime = await handle.finished;
+		retainedMutationGuard =
+			mutationUncertain &&
+			runtime.operations.some((operation) => operation.status === "unknown");
 		emit("result", {
 			runtime,
 			answer: handle.value()?.content ?? "",
@@ -164,7 +205,11 @@ async function run(config) {
 		emit("error", String(error));
 		process.exitCode = 1;
 	} finally {
-		await agent?.close().catch((error) => emit("error", String(error)));
+		await agent
+			?.close()
+			.catch((error) =>
+				emit(retainedMutationGuard ? "cleanup-error" : "error", String(error)),
+			);
 		await session?.close().catch((error) => emit("error", String(error)));
 		emit(
 			"artifacts",

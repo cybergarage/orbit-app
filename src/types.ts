@@ -80,7 +80,12 @@ export interface Snapshot {
 	executions?: Execution[];
 	projects: Project[];
 	schedules: Schedule[];
-	active?: { projectId: string; sessionId: string; containerName?: string };
+	active?: {
+		projectId: string;
+		sessionId: string;
+		containerName?: string;
+		workspaceMutations?: boolean;
+	};
 	health?: Health;
 	recoveryBlocked?: boolean;
 }

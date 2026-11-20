@@ -16,11 +16,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: app
-      - name: Check out the pinned unpublished Core source
+      - name: Check out the pinned Core main source
         uses: actions/checkout@v4
         with:
           repository: cybergarage/orbit
-          ref: c257b718623a3a0baa2021110517e719e81105d6
+          ref: 210072fb44debfc08398c2b740c2d4008da2eefd
           path: orbit
       - uses: actions/setup-node@v4
         with:
@@ -47,6 +47,8 @@ jobs:
       - run: npm run worker:build
       - name: Verify the workspace-only Docker runner with generated files
         run: node --import tsx scripts/workspace-docker-smoke.ts
+      - name: Verify the opt-in App Docker route with a synthetic model
+        run: node --import tsx scripts/workspace-app-docker-smoke.ts
       # Host-wide lsof inspection must not race other fixture Docker mounts.
       - run: npm test
       - run: npm run build

@@ -59,7 +59,7 @@ export function dockerArgs(name: string, workspace: string, core: string) {
 		image,
 	];
 }
-/** Plan only. The isolated workspace executor image is not built or launched yet. */
+/** Not used by the App. The isolated image has a separate developer build. */
 export function dockerWorkspaceArgs(name: string, workspace: string) {
 	if (!/^orbit-app-workspace-[a-f0-9-]{36}$/.test(name))
 		throw new Error("Invalid workspace worker name");

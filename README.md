@@ -86,19 +86,28 @@ host and worker locks and the CI source checkout use that same artifact/pin.
 
 ### Workspace-only execution boundary (development)
 
-The workspace-only request encoder and Docker argument plan are groundwork for
-hosting Core's Agent in Electron. They are not called by the App and do not
-install or launch a workspace executor. Existing profiles, Docker workers, and
-the pinned Core artifact are unchanged.
+A separate Docker image handles one prepared `write` or `edit` request at a
+time. It is not called by the App, and existing profiles, workers, and the
+pinned Core artifact are unchanged. The image does not provide a shell tool,
+read/search operations, host Agent integration or backend selection.
 
-The intended caller must bind the execution to a canonical App-approved
-workspace. Core authorizes and journals the operation on the host. The encoder
-translates only the approved working directory and target into `/workspace`,
-rejects requests outside that root, and preserves the Core mutation digests.
-The launch plan mounts the selected workspace only, with the existing isolation
-flags and no session, Project catalog or credential mount.
+The intended caller binds the selected workspace and authorizes the operation
+through Core. The runner accepts a single JSON frame on stdin (up to 1 MiB),
+mounts no session, Project catalog or credential directories, and returns only
+a bounded text result. It opens the Linux-mounted workspace without following
+symlinks, rejects hard-linked/nonregular targets and missing parent directories,
+verifies the preimage again immediately before commit, and verifies the staged and
+committed result digests. Creation uses a no-replace commit; overwrite is atomic.
+The caller must not concurrently mutate the same workspace. As with ordinary
+filesystem tools, verification and overwrite are not one atomic compare-and-swap
+against independent host edits.
 
-Before wiring this into a run, implement the workspace-only image and protocol,
-validate each target and mutation digest inside the container, and confirm
-cancellation and ambiguous settlement with real Docker. A failure must never
-reroute the operation to the host. This slice does not migrate existing profiles.
+A refusal before commit is a known tool error. Missing/invalid reply, container
+cancellation, or post-commit verification failure must be treated as unknown
+settlement, never retried or rerouted to the host. App process management for
+this handoff is still unwired. No recursive directory creation or profile
+migration is in scope.
+
+The developer smoke check runs only generated files in a unique temporary
+workspace and builds/removes its own uniquely tagged image:
+`node --import tsx scripts/workspace-docker-smoke.ts`.

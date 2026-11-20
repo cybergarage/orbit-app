@@ -85,6 +85,7 @@ export interface Snapshot {
 		sessionId: string;
 		containerName?: string;
 		workspaceMutations?: boolean;
+		workspaceReads?: boolean;
 	};
 	health?: Health;
 	recoveryBlocked?: boolean;

@@ -3,14 +3,30 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { command, dockerPath, Worker } from "../src/worker";
+import {
+	command,
+	dockerPath,
+	dockerWorkspaceArgs,
+	Worker,
+} from "../src/worker";
 
 const id = randomUUID();
-const images = ["worker", "runner", "stale", "unacknowledged", "slow"].map(
-	(role) => `orbit-app-route-smoke-${role}:${id}`,
-);
-const [workerImage, runnerImage, staleImage, unacknowledged, slowImage] =
-	images;
+const images = [
+	"worker",
+	"runner",
+	"stale",
+	"unacknowledged",
+	"slow",
+	"slow-read",
+].map((role) => `orbit-app-route-smoke-${role}:${id}`);
+const [
+	workerImage,
+	runnerImage,
+	staleImage,
+	unacknowledged,
+	slowImage,
+	slowReader,
+] = images;
 const root = await fs.realpath(
 	await fs.mkdtemp(path.join(os.tmpdir(), "orbit-app-route-smoke-")),
 );
@@ -59,12 +75,16 @@ async function exercise(
 		cancel?: boolean;
 		uncertain?: boolean;
 		missingRunner?: boolean;
+		reads?: boolean;
+		seed?: string;
 	} = {},
 ) {
 	const workspace = path.join(root, name, "workspace");
 	const state = path.join(root, name, "state");
 	await fs.mkdir(workspace, { recursive: true });
 	await fs.mkdir(state);
+	if (options.seed !== undefined)
+		await fs.writeFile(path.join(workspace, "note.txt"), options.seed);
 	const events: any[] = [],
 		calls: string[][] = [],
 		inputs: string[] = [];
@@ -83,6 +103,7 @@ async function exercise(
 			model: "gpt-4o",
 			prompt: "Synthetic local Docker test; no network or paid model.",
 			workspaceMutations: optIn,
+			workspaceReads: options.reads === true,
 		},
 		(event) => {
 			events.push(event);
@@ -110,7 +131,28 @@ async function exercise(
 			async command(executable, args, timeout) {
 				calls.push(args);
 				const result = await command(executable, args, timeout);
-				if (args[0] === "create") admitted();
+				if (args[0] === "create") {
+					if (args.at(-1) === "/opt/worker/workspace-reader.mjs") {
+						const mounts = JSON.parse(
+							await docker([
+								"inspect",
+								"--format",
+								"{{json .Mounts}}",
+								result.trim(),
+							]),
+						);
+						assert.deepEqual(
+							mounts.map((m: any) => [m.Type, m.Destination, m.RW]),
+							[["bind", "/workspace", false]],
+						);
+						assert.ok(
+							args.includes(
+								`type=bind,src=${workspace},dst=/workspace,readonly,bind-recursive=disabled`,
+							),
+						);
+					}
+					admitted();
+				}
 				return result;
 			},
 		},
@@ -123,12 +165,20 @@ async function exercise(
 	const started = performance.now();
 	try {
 		if (options.worker === staleImage) {
-			await assert.rejects(worker.start(), /compatible Docker worker image/);
+			await assert.rejects(
+				worker.start(),
+				options.reads
+					? /compatible Docker workspace reader image/
+					: /compatible Docker worker image/,
+			);
 			assert.equal(modelCalls, 0);
 			assert.deepEqual(await fs.readdir(state), []);
 			assert.equal(calls.length, 1);
 		} else if (options.missingRunner) {
-			await assert.rejects(worker.start(), /compatible Docker workspace runner image/);
+			await assert.rejects(
+				worker.start(),
+				/compatible Docker workspace runner image/,
+			);
 			assert.equal(modelCalls, 0);
 			assert.deepEqual(await fs.readdir(state), []);
 			assert.equal(calls.length, 2);
@@ -137,7 +187,9 @@ async function exercise(
 			if (options.cancel) {
 				await Promise.race([
 					childCreated,
-					running.then(() => assert.fail("Child not created before worker exit")),
+					running.then(() =>
+						assert.fail("Child not created before worker exit"),
+					),
 				]);
 				await new Promise((resolve) => setTimeout(resolve, 500));
 				await stop();
@@ -151,13 +203,21 @@ async function exercise(
 		await worker.confirmGone().catch(tolerateGuard);
 	}
 	if (options.uncertain || options.cancel)
-		assert.ok(performance.now() - started < 25_000, "Cleanup exceeded fixture deadline");
+		assert.ok(
+			performance.now() - started < 25_000,
+			"Cleanup exceeded fixture deadline",
+		);
 	assert.equal(
-		(await docker([
-			"ps", "-a", "--filter",
-			`label=org.cybergarage.orbit-app.workspace-parent=${worker.name}`,
-			"--format", "{{.Names}}",
-		])).trim(),
+		(
+			await docker([
+				"ps",
+				"-a",
+				"--filter",
+				`label=org.cybergarage.orbit-app.workspace-parent=${worker.name}`,
+				"--format",
+				"{{.Names}}",
+			])
+		).trim(),
 		"",
 		"No workspace-only child may remain after settlement",
 	);
@@ -177,12 +237,36 @@ try {
 		["build", "--network=none", "--tag", runnerImage, "worker/workspace"],
 		120_000,
 	);
+	await fs.writeFile(
+		path.join(root, "slow-reader.mjs"),
+		"setTimeout(() => {}, 60000);\n",
+	);
 	for (const [tag, from, body] of [
-		[staleImage, workerImage, 'LABEL org.cybergarage.orbit-app.workspace-mutations="0"'],
-		[unacknowledged, runnerImage, 'ENTRYPOINT ["sh", "-c", "node /opt/workspace-mutation.mjs >/dev/null"]'],
-		[slowImage, runnerImage, 'ENTRYPOINT ["node", "-e", "setTimeout(() => {}, 60000)"]'],
+		[
+			staleImage,
+			workerImage,
+			'LABEL org.cybergarage.orbit-app.workspace-mutations="0" org.cybergarage.orbit-app.workspace-reader="0"',
+		],
+		[
+			unacknowledged,
+			runnerImage,
+			'ENTRYPOINT ["sh", "-c", "node /opt/workspace-mutation.mjs >/dev/null"]',
+		],
+		[
+			slowImage,
+			runnerImage,
+			'ENTRYPOINT ["node", "-e", "setTimeout(() => {}, 60000)"]',
+		],
+		[
+			slowReader,
+			workerImage,
+			"COPY slow-reader.mjs /opt/worker/workspace-reader.mjs",
+		],
 	]) {
-		await fs.writeFile(path.join(root, "Dockerfile"), `FROM ${from}\n${body}\n`);
+		await fs.writeFile(
+			path.join(root, "Dockerfile"),
+			`FROM ${from}\n${body}\n`,
+		);
 		await docker(["build", "--network=none", "--tag", tag, root], 120_000);
 	}
 
@@ -194,25 +278,114 @@ try {
 	});
 	assert.equal(missing.creates, 0);
 	const standard = await exercise("default", [write, completed], false);
-	assert.equal(standard.runtime?.outcome, "completed", JSON.stringify(standard.events));
+	assert.equal(
+		standard.runtime?.outcome,
+		"completed",
+		JSON.stringify(standard.events),
+	);
 	assert.equal(standard.calls.length, 0);
 	assert.equal(await standard.read(), "fixture initial");
 
 	const routed = await exercise("routed", [write, edit, read, completed], true);
-	assert.equal(routed.runtime?.outcome, "completed", JSON.stringify(routed.events));
+	assert.equal(
+		routed.runtime?.outcome,
+		"completed",
+		JSON.stringify(routed.events),
+	);
 	assert.equal(await routed.read(), "fixture updated");
 	assert.equal(routed.creates, 2, "Only write and edit use the runner");
 	assert.ok(routed.inputs.at(-1)?.includes("fixture updated"));
+
+	const oldRead = await exercise("stale-read", [], false, {
+		worker: staleImage,
+		reads: true,
+	});
+	assert.equal(oldRead.creates, 0);
+	const sample = `bench sample\n${"\t".repeat(22_000)}`;
+	const list = toolChoice("list", { path: "/workspace" });
+	const glob = toolChoice("glob", { path: "/workspace", pattern: "*.txt" });
+	const grep = toolChoice("grep", { ...note, pattern: "bench", literal: true });
+	const choices = [read, list, glob, grep, completed];
+	const oldReadPath = await exercise("legacy-read", choices, false, {
+		seed: sample,
+	});
+	const readOnlyPath = await exercise("isolated-read", choices, false, {
+		seed: sample,
+		reads: true,
+	});
+	assert.equal(oldReadPath.runtime?.outcome, "completed");
+	assert.equal(oldReadPath.creates, 0);
+	assert.equal(
+		readOnlyPath.runtime?.outcome,
+		"completed",
+		JSON.stringify(readOnlyPath.events),
+	);
+	assert.equal(readOnlyPath.creates, 4);
+	const toolMessages = (inputs: string[]) =>
+		JSON.parse(inputs.at(-1) ?? "{}").messages.filter(
+			(message: { role: string }) => message.role === "tool",
+		);
+	assert.deepEqual(
+		toolMessages(readOnlyPath.inputs),
+		toolMessages(oldReadPath.inputs),
+		"All model-visible tool results must match",
+	);
+	assert.equal(toolMessages(readOnlyPath.inputs).length, 4);
+	assert.equal(await readOnlyPath.read(), sample);
+
+	const mountFixture = path.join(root, "immutable-bind");
+	await fs.mkdir(mountFixture);
+	const probe = dockerWorkspaceArgs(
+		`orbit-app-workspace-${randomUUID()}-read`,
+		mountFixture,
+		workerImage,
+		true,
+	);
+	probe.splice(
+		-1,
+		1,
+		"-e",
+		"try { require('node:fs').writeFileSync('/workspace/probe.txt','fixture'); process.exitCode=1 } catch(e) { if (e.code!=='EROFS') throw e }",
+	);
+	await docker(probe);
+	assert.deepEqual(await fs.readdir(mountFixture), []);
+
+	const timed = await exercise("timed-read", [read, completed], false, {
+		worker: slowReader,
+		seed: sample,
+		reads: true,
+	});
+	assert.equal(timed.creates, 1);
+	assert.equal(timed.runtime?.outcome, "completed");
+	assert.match(
+		timed.inputs.at(-1) ?? "",
+		/Workspace observation failed or exceeded its limits/,
+	);
+	assert.equal(await timed.read(), sample);
+	const cancelledRead = await exercise("cancelled-read", [read], false, {
+		worker: slowReader,
+		seed: sample,
+		reads: true,
+		cancel: true,
+	});
+	assert.equal(cancelledRead.creates, 1);
+	assert.equal(await cancelledRead.read(), sample);
 
 	const unknown = await exercise("unacknowledged", [write], true, {
 		runner: unacknowledged,
 		uncertain: true,
 	});
 	assert.equal(await unknown.read(), "fixture initial", "Commit did occur");
-	assert.equal(unknown.creates, 1, "Lost acknowledgment must never replay a write");
+	assert.equal(
+		unknown.creates,
+		1,
+		"Lost acknowledgment must never replay a write",
+	);
 	assert.equal(unknown.inputs.length, 1, "Core stops after an uncertain write");
 	assert.ok(
-		unknown.runtime?.operations.some((operation: any) => operation.status === "unknown"),
+		unknown.runtime?.operations.some(
+			(operation: any) => operation.status === "unknown",
+		),
 		JSON.stringify(unknown.events),
 	);
 
@@ -223,7 +396,7 @@ try {
 	assert.equal(cancelled.creates, 1);
 	await assert.rejects(cancelled.read(), { code: "ENOENT" });
 	console.log(
-		"Verified real App Docker worker: stale image rejected; default preserved; write/edit only; committed-but-unacknowledged and cancelled runner cleaned without replay.",
+		"Verified real App Docker routes: default, bounded write/edit and unknown handling; read/list/glob/grep parity, immutable mount, deadline, cancellation and stale image refusal.",
 	);
 } finally {
 	for (const image of images.toReversed())

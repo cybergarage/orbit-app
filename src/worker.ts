@@ -2,8 +2,14 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+	executeWorkspaceMutation,
+	stopWorkspaceMutation,
+} from "./workspace-mutation-client";
 import { randomUUID } from "node:crypto";
 export const image = "docker.io/library/orbit-app-worker:project-memory-local";
+const workspaceMutationsLabel = "org.cybergarage.orbit-app.workspace-mutations";
+const workspaceRunnerLabel = "org.cybergarage.orbit-app.workspace-runner";
 export const dockerPath =
 	process.platform === "darwin" ? "/usr/local/bin/docker" : "docker";
 export function workerUserArgs(
@@ -45,7 +51,12 @@ function dockerIsolationArgs(name: string, label: string) {
 		"/tmp:rw,noexec,nosuid,size=256m",
 	];
 }
-export function dockerArgs(name: string, workspace: string, core: string) {
+export function dockerArgs(
+	name: string,
+	workspace: string,
+	core: string,
+	workerImage = image,
+) {
 	return [
 		...dockerIsolationArgs(
 			name,
@@ -56,11 +67,16 @@ export function dockerArgs(name: string, workspace: string, core: string) {
 		"--mount",
 		`type=bind,src=${core},dst=/state`,
 		...workerUserArgs(),
-		image,
+		workerImage,
 	];
 }
-/** Not used by the App. The isolated image has a separate developer build. */
-export function dockerWorkspaceArgs(name: string, workspace: string) {
+const workspaceImage = "docker.io/library/orbit-app-workspace:local";
+/** The separate runner never receives the Core state mount. */
+export function dockerWorkspaceArgs(
+	name: string,
+	workspace: string,
+	runnerImage = workspaceImage,
+) {
 	if (!/^orbit-app-workspace-[a-f0-9-]{36}$/.test(name))
 		throw new Error("Invalid workspace worker name");
 	if (
@@ -77,7 +93,7 @@ export function dockerWorkspaceArgs(name: string, workspace: string) {
 		"--workdir",
 		"/workspace",
 		...workerUserArgs(),
-		"docker.io/library/orbit-app-workspace:local",
+		runnerImage,
 	];
 }
 export function command(
@@ -112,6 +128,56 @@ export function command(
 		});
 	});
 }
+export async function workerLaunchArgs(
+	name: string,
+	workspace: string,
+	core: string,
+	workspaceMutations: boolean,
+	run = command,
+	workerImage = image,
+): Promise<string[]> {
+	if (!workspaceMutations) return dockerArgs(name, workspace, core, workerImage);
+	const admitted = await admitDockerImage(
+		workerImage,
+		workspaceMutationsLabel,
+		"worker",
+		run,
+	);
+	// An inspected tag can be moved before launch. Run the admitted local ID.
+	return dockerArgs(name, workspace, core, admitted);
+}
+
+async function admitDockerImage(
+	imageRef: string,
+	label: string,
+	role: string,
+	run: typeof command,
+) {
+	const incompatible = () =>
+		new Error(
+			`Workspace mutations require a compatible Docker ${role} image. Rebuild it before retrying.`,
+		);
+	let metadata: string;
+	try {
+		metadata = await run(
+			dockerPath,
+			[
+				"image",
+				"inspect",
+				"--format",
+				`{{.Id}} {{index .Config.Labels "${label}"}}`,
+				imageRef,
+			],
+			5_000,
+		);
+	} catch {
+		throw incompatible();
+	}
+	const match = /^(sha256:[a-f0-9]{64}) 1$/.exec(metadata.trimEnd());
+	if (!match) throw incompatible();
+	return match[1];
+}
+
 export async function modelRequest(
 	route: string,
 	body: any,
@@ -150,6 +216,14 @@ export async function modelRequest(
 		throw new Error(`Ollama ${r.status}: ${(await r.text()).slice(0, 1000)}`);
 	return r.json();
 }
+export function stopWorkerWorkspaceMutation(name: string) {
+	return stopWorkspaceMutation(name, {
+		docker: dockerPath,
+		command,
+		args: dockerWorkspaceArgs,
+	});
+}
+
 export class Worker {
 	readonly name = `orbit-app-${randomUUID()}`;
 	child?: ChildProcessWithoutNullStreams;
@@ -162,6 +236,64 @@ export class Worker {
 	private rpcActive = 0;
 	private rpcIds = new Set<string>();
 	private diskTimer?: NodeJS.Timeout;
+	private workspaceIdentity?: { dev: number; ino: number };
+	private mutationUncertain = false;
+	private admittedMutationImage?: string;
+	private activeMutation?: {
+		id: string;
+		abort: AbortController;
+		task: Promise<unknown>;
+	};
+	get workspaceMutationsEnabled(): boolean {
+		return this.config.workspaceMutations === true;
+	}
+	private async captureWorkspaceIdentity() {
+		const stat = await fs.lstat(this.workspace);
+		if (
+			!stat.isDirectory() ||
+			(await fs.realpath(this.workspace)) !== this.workspace
+		)
+			throw new Error("Workspace no longer matches the approved mount");
+		return { dev: stat.dev, ino: stat.ino };
+	}
+	private async mutate(id: string, operation: any) {
+		if (
+			!this.workspaceMutationsEnabled ||
+			this.activeMutation ||
+			!this.workspaceIdentity ||
+			!this.admittedMutationImage
+		)
+			throw new Error("Workspace mutation is unavailable");
+		const runnerImage = this.admittedMutationImage;
+		const abort = new AbortController();
+		const signal = AbortSignal.any([abort.signal, this.controller.signal]);
+		const task = (async () => {
+			const current = await this.captureWorkspaceIdentity();
+			if (
+				current.dev !== this.workspaceIdentity?.dev ||
+				current.ino !== this.workspaceIdentity.ino
+			)
+				throw new Error("Workspace no longer matches the approved mount");
+			return executeWorkspaceMutation(
+				this.name,
+				this.workspace,
+				operation,
+				signal,
+				{
+					docker: dockerPath,
+					command: this.fixtureDocker.command ?? command,
+					args: (name, workspace) =>
+						dockerWorkspaceArgs(name, workspace, runnerImage),
+				},
+			);
+		})();
+		this.activeMutation = { id, abort, task };
+		try {
+			return await task;
+		} finally {
+			this.activeMutation = undefined;
+		}
+	}
 	constructor(
 		private workspace: string,
 		private core: string,
@@ -174,16 +306,34 @@ export class Worker {
 				signal: AbortSignal,
 			): Promise<unknown>;
 		},
+		private fixtureDocker: {
+			command?: typeof command;
+			mutationImage?: string;
+			workerImage?: string;
+		} = {},
 	) {}
-	start(): Promise<void> {
+	async start(): Promise<void> {
+		if (this.workspaceMutationsEnabled)
+			this.workspaceIdentity = await this.captureWorkspaceIdentity();
+		const args = await workerLaunchArgs(
+			this.name,
+			this.workspace,
+			this.core,
+			this.workspaceMutationsEnabled,
+			this.fixtureDocker.command,
+			this.fixtureDocker.workerImage,
+		);
+		if (this.workspaceMutationsEnabled)
+			this.admittedMutationImage = await admitDockerImage(
+				this.fixtureDocker.mutationImage ?? workspaceImage,
+				workspaceRunnerLabel,
+				"workspace runner",
+				this.fixtureDocker.command ?? command,
+			);
 		if (this.stopping)
 			return Promise.reject(Error("Worker cancelled before start"));
 		return new Promise((resolve, reject) => {
-			const c = spawn(
-				dockerPath,
-				dockerArgs(this.name, this.workspace, this.core),
-				{ stdio: ["pipe", "pipe", "pipe"] },
-			);
+			const c = spawn(dockerPath, args, { stdio: ["pipe", "pipe", "pipe"] });
 			this.started = true;
 			this.child = c;
 			c.stdin.on("error", () => {});
@@ -214,10 +364,24 @@ export class Worker {
 				try {
 					const e = JSON.parse(line);
 					if (e.type === "rpc") void this.rpc(e);
-					else if (e.type === "approval") {
+					else if (e.type === "mutation-cancel") {
+						const mutation = this.activeMutation;
+						if (mutation && mutation.id === e.id) mutation.abort.abort();
+					} else if (e.type === "approval") {
 						this.approval = e.data;
 						this.event(e);
-					} else this.event(e);
+					} else {
+						this.event(e);
+						if (
+							e.type === "result" &&
+							this.mutationUncertain &&
+							e.data?.runtime?.outcome === "incomplete"
+						) {
+							// Core recorded the uncertain effect and retains the ownership
+							// guard. Stop this process without removing the guard or replaying.
+							this.requestStop();
+						}
+					}
 				} catch {
 					this.event({
 						type: "protocol-error",
@@ -255,6 +419,9 @@ export class Worker {
 					prompt,
 					model,
 					provider: provider ?? "ollama",
+					...(this.workspaceMutationsEnabled
+						? { workspaceMutations: true }
+						: {}),
 				},
 			});
 		});
@@ -263,6 +430,7 @@ export class Worker {
 		this.child?.stdin.write(`${JSON.stringify(data)}\n`);
 	}
 	async rpc(e: any) {
+		const mutation = e.route === "workspace-mutation";
 		if (this.stopping || this.controller.signal.aborted) {
 			if (typeof e.id === "string" && /^[a-f0-9-]{36}$/.test(e.id)) {
 				this.event({
@@ -277,7 +445,9 @@ export class Worker {
 			typeof e.id !== "string" ||
 			!/^[a-f0-9-]{36}$/.test(e.id) ||
 			this.rpcIds.has(e.id) ||
-			!this.allowedRoutes().includes(e.route) ||
+			!(mutation
+				? this.workspaceMutationsEnabled
+				: this.allowedRoutes().includes(e.route)) ||
 			++this.rpcCalls > 32 ||
 			this.rpcActive >= 2
 		) {
@@ -296,16 +466,19 @@ export class Worker {
 				++this.modelCalls > 9
 			)
 				throw new Error("Model call budget exceeded");
-			const data = this.gateway
-				? await this.gateway.request(e.route, e.body, this.controller.signal)
-				: await modelRequest(
-						e.route,
-						e.body,
-						this.config.model,
-						this.controller.signal,
-					);
+			const data = mutation
+				? await this.mutate(e.id, e.body)
+				: this.gateway
+					? await this.gateway.request(e.route, e.body, this.controller.signal)
+					: await modelRequest(
+							e.route,
+							e.body,
+							this.config.model,
+							this.controller.signal,
+						);
 			this.send({ type: "rpc-result", id: e.id, data });
 		} catch {
+			if (mutation) this.mutationUncertain = true;
 			if (this.controller.signal.aborted)
 				this.event({
 					type: "model-cancelled",
@@ -314,9 +487,11 @@ export class Worker {
 			this.send({
 				type: "rpc-result",
 				id: e.id,
-				error: this.controller.signal.aborted
-					? "Worker cancelled"
-					: "Model request failed; check provider availability and credentials",
+				error: mutation
+					? "Workspace mutation outcome unknown; do not replay"
+					: this.controller.signal.aborted
+						? "Worker cancelled"
+						: "Model request failed; check provider availability and credentials",
 			});
 		} finally {
 			this.rpcActive--;
@@ -344,6 +519,10 @@ export class Worker {
 	}
 	async confirmGone() {
 		if (!this.child && !this.started) return;
+		if (this.workspaceMutationsEnabled) {
+			await this.activeMutation?.task.catch(() => {});
+			await stopWorkerWorkspaceMutation(this.name);
+		}
 		const names = await command(dockerPath, [
 			"ps",
 			"-a",

@@ -83,13 +83,27 @@ new chats; existing choices and admitted runs remain isolated. No models are dow
 The bundled Core includes ModelCatalog and ModelGateway. Its exact clean source
 commit and artifact hash are recorded in worker/packages/core-artifact.json;
 host and worker locks and the CI source checkout use that same artifact/pin.
+This artifact was reproduced with Node 26.10.0 and npm 11.19.1 on macOS
+arm64; verification on other platforms uses the checked-in bytes.
 
 ### Workspace-only execution boundary (development)
 
 A separate Docker image handles one prepared `write` or `edit` request at a
-time. It is not called by the App, and existing profiles, workers, and the
-pinned Core artifact are unchanged. The image does not provide a shell tool,
-read/search operations, host Agent integration or backend selection.
+time. The App defaults to its existing Docker worker for all tools. For local
+development, rebuild that worker and the runner, then opt in before launching:
+
+```sh
+npm run worker:build
+npm run worker:workspace:build
+ORBIT_APP_DOCKER_WORKSPACE_MUTATIONS=1 npm run dev
+```
+
+The App checks both image capabilities before starting a run and launches the
+exact inspected image IDs. Old or missing images are rejected without falling
+back to the worker or placing a session into recovery. Only
+approved `write` and `edit` use the one-shot runner. Read, search, and shell
+stay on their existing paths. Session and Project knowledge state remains in the
+existing worker architecture.
 
 The intended caller binds the selected workspace and authorizes the operation
 through Core. The runner accepts a single JSON frame on stdin (up to 1 MiB),
@@ -104,9 +118,10 @@ against independent host edits.
 
 A refusal before commit is a known tool error. Missing/invalid reply, container
 cancellation, or post-commit verification failure must be treated as unknown
-settlement, never retried or rerouted to the host. App process management for
-this handoff is still unwired. No recursive directory creation or profile
-migration is in scope.
+settlement, never retried or rerouted to the host. The App stops the affected
+worker without clearing Core's recovery guard. Inspect the actual workspace and
+resolve recovery before requesting another change. No recursive directory
+creation or profile migration is in scope.
 
 The developer smoke check runs only generated files in a unique temporary
 workspace and builds/removes its own uniquely tagged image:

@@ -6,6 +6,8 @@ import {
 } from "./core-models";
 import type { KnowledgeExtractor } from "@cybergarage/orbit";
 import type { AcquireSources } from "./source-leases";
+import { HostAgentRun } from "./host-agent";
+import { HostCoreNames, acquireHostSources } from "./host-core";
 import { ProjectKnowledge } from "./project-knowledge";
 import { AppInitialization } from "./initialization-host";
 import type { InitializationMode } from "./initialization";
@@ -63,7 +65,8 @@ export class Supervisor {
 	private maintenanceTask?: Promise<unknown>;
 	private storageStopped = false;
 	private workerFinished?: Promise<void>;
-	worker?: Worker;
+	worker?: Worker | HostAgentRun;
+	private readonly models: ModelsHost;
 	private admitted = false;
 	private ticking = false;
 	private currentRun?: RunControl;
@@ -99,9 +102,12 @@ export class Supervisor {
 			acquire?: AcquireSources;
 			extract?: KnowledgeExtractor;
 		} = {},
-		private readonly models: ModelsHost = new CoreModelsHost(),
+		models?: ModelsHost,
+		private readonly hostAgent = false,
 	) {
-		this.store = new Store(root);
+		this.models = models ?? new CoreModelsHost(!this.hostAgent);
+		const metadata = this.hostAgent ? new HostCoreNames(root) : undefined;
+		this.store = new Store(root, metadata, this.hostAgent);
 		this.knowledge = new ProjectKnowledge(
 			this.store,
 			() =>
@@ -110,8 +116,10 @@ export class Supervisor {
 				!this.maintenance &&
 				!this.recoveryBlocked &&
 				!this.store.state.active,
-			knowledgeOptions.acquire,
+			knowledgeOptions.acquire ??
+				(this.hostAgent ? acquireHostSources : undefined),
 			knowledgeOptions.extract,
+			metadata,
 		);
 		this.initialization = new AppInitialization(this.store);
 		this.titles = new AutoTitles(
@@ -152,6 +160,8 @@ export class Supervisor {
 			if (error.code !== "ENOENT") throw error;
 		}
 		await this.store.init();
+		if (this.hostAgent) this.store.state.executionBackend = "host-readonly";
+		else delete this.store.state.executionBackend;
 		await this.reconcile();
 		await this.knowledge.init();
 		this.knowledge.kick();
@@ -168,7 +178,16 @@ export class Supervisor {
 		if (!a) return;
 		this.recoveryBlocked = true;
 		try {
-			await command(dockerPath, ["info", "--format", "{{.ServerVersion}}"]);
+			if (a.runtime === "host-v1") {
+				if (!this.hostAgent || a.containerName)
+					throw new Error("Saved host run belongs to another profile mode");
+				if (a.readerOwner)
+					await stopWorkerWorkspaceMutation(a.readerOwner, true);
+			} else {
+				if (this.hostAgent || a.readerOwner)
+					throw new Error("Host Agent cannot reconcile a legacy Agent writer");
+				await command(dockerPath, ["info", "--format", "{{.ServerVersion}}"]);
+			}
 			if (a.containerName) {
 				if (!/^orbit-app-[a-f0-9-]{36}$/.test(a.containerName))
 					throw new Error("Invalid saved worker identity");
@@ -238,6 +257,10 @@ export class Supervisor {
 			health.docker = true;
 			await command(dockerPath, ["image", "inspect", image]);
 			health.image = true;
+			if (this.hostAgent)
+				health.detail.push(
+					"Host Agent development profile: Docker read/search only; shell and file changes are disabled.",
+				);
 		} catch (e) {
 			health.detail.push(String(e));
 		}
@@ -414,6 +437,7 @@ export class Supervisor {
 			this.store.state.active = {
 				projectId: p.projectId,
 				sessionId: p.sessionId,
+				...(this.hostAgent ? { runtime: "host-v1" as const } : {}),
 			};
 			await this.publish();
 			if (epoch !== this.epoch || this.closed || this.maintenance)
@@ -426,31 +450,59 @@ export class Supervisor {
 			);
 			if (epoch !== this.epoch || this.closed || this.maintenance)
 				throw new Error("Submission cancelled");
-			const worker = this.factory(
-				workspace,
-				this.store.location(p.projectId, p.sessionId).core,
-				{
-					sessionId: p.sessionId,
-					requestId: p.requestId,
-					projectContext,
-					workspaceMutations:
-						process.env.ORBIT_APP_DOCKER_WORKSPACE_MUTATIONS === "1",
-					workspaceReads: process.env.ORBIT_APP_DOCKER_WORKSPACE_READS === "1",
-					prompt: this.store.project(p.projectId).instructions
-						? `Project guidance (follow applicable workspace ORBIT.md / AGENTS.md instructions):\n${this.store.project(p.projectId).instructions}\n\nUser task:\n${prompt}`
-						: prompt,
-					model,
-					provider,
-				},
-				(e) => this.receiveEvent(run, e),
-			);
+			const core = this.store.location(p.projectId, p.sessionId).core;
+			const instructions = this.store.project(p.projectId).instructions;
+			const config = {
+				sessionId: p.sessionId,
+				requestId: p.requestId,
+				projectContext,
+				prompt: instructions
+					? this.hostAgent
+						? `Project guidance:\n${instructions}\n\nUser task:\n${prompt}`
+						: `Project guidance (follow applicable workspace ORBIT.md / AGENTS.md instructions):\n${instructions}\n\nUser task:\n${prompt}`
+					: prompt,
+				model,
+				provider,
+			};
+			const event = (e: any) => this.receiveEvent(run, e);
+			const worker = this.hostAgent
+				? new HostAgentRun(
+						workspace,
+						core,
+						config,
+						event,
+						(route, body, signal) =>
+							this.models.request(
+								workspace,
+								{ provider, model },
+								route,
+								body,
+								signal,
+							),
+					)
+				: this.factory(
+						workspace,
+						core,
+						{
+							...config,
+							workspaceMutations:
+								process.env.ORBIT_APP_DOCKER_WORKSPACE_MUTATIONS === "1",
+							workspaceReads:
+								process.env.ORBIT_APP_DOCKER_WORKSPACE_READS === "1",
+						},
+						event,
+					);
 			this.worker = worker;
 			if (this.store.state.active) {
-				this.store.state.active.containerName = worker.name;
-				if (worker.workspaceMutationsEnabled)
-					this.store.state.active.workspaceMutations = true;
-				if (worker.workspaceReadsEnabled)
-					this.store.state.active.workspaceReads = true;
+				if (this.hostAgent) {
+					this.store.state.active.readerOwner = worker.name;
+				} else {
+					this.store.state.active.containerName = worker.name;
+					if (worker.workspaceMutationsEnabled)
+						this.store.state.active.workspaceMutations = true;
+					if (worker.workspaceReadsEnabled)
+						this.store.state.active.workspaceReads = true;
+				}
 			}
 			await this.publish();
 			if (epoch !== this.epoch || this.closed || this.maintenance) {
@@ -476,7 +528,11 @@ export class Supervisor {
 					run.finished = true;
 					try {
 						await worker.confirmGone();
-						if (this.store.state.active?.containerName === worker.name)
+						if (
+							this.store.state.active?.[
+								this.hostAgent ? "readerOwner" : "containerName"
+							] === worker.name
+						)
 							delete this.store.state.active;
 					} catch {
 						this.recoveryBlocked = true;
@@ -666,6 +722,13 @@ export class Supervisor {
 	}
 	dispatch(commandName: string, p: any = {}): Promise<any> {
 		if (this.closed) return Promise.reject(new Error("App is closing"));
+		if (this.hostAgent && commandName.startsWith("initialization-")) {
+			const reason =
+				"Initialization is not available in the separate Host Agent development profile.";
+			return commandName === "initialization-status"
+				? Promise.resolve({ available: false, reason, root: this.store.root })
+				: Promise.reject(new Error(reason));
+		}
 		if (commandName === "initialization-status")
 			return Promise.resolve({
 				...initializationAvailability,
@@ -902,6 +965,10 @@ export class Supervisor {
 				return;
 			}
 			case "artifacts": {
+				if (this.hostAgent)
+					throw new Error(
+						"Artifact listing is unavailable in the Host Agent development profile",
+					);
 				const entries = await fs.readdir(
 					p.sessionId
 						? this.store.location(p.projectId, p.sessionId).workspace

@@ -41,6 +41,7 @@ interface CoreModelsAPI {
 }
 /** Uses existing Core settings and environment credentials on the host. No credentials enter IPC. */
 export class CoreModelsHost implements ModelsHost {
+	constructor(private readonly loadProjectSettings = true) {}
 	private api?: Promise<CoreModelsAPI>;
 	private loadAPI() {
 		this.api ??= import("@cybergarage/orbit").then(
@@ -58,7 +59,9 @@ export class CoreModelsHost implements ModelsHost {
 		this.instance ??= new api.ModelCatalog();
 		let settings: unknown;
 		try {
-			settings = await api.loadWorkspaceSettings(cwd);
+			settings = this.loadProjectSettings
+				? await api.loadWorkspaceSettings(cwd)
+				: {};
 		} catch {
 			throw new Error("Model settings could not be loaded");
 		}
@@ -78,7 +81,9 @@ export class CoreModelsHost implements ModelsHost {
 			);
 		let settings: unknown;
 		try {
-			settings = await api.loadWorkspaceSettings(cwd);
+			settings = this.loadProjectSettings
+				? await api.loadWorkspaceSettings(cwd)
+				: {};
 		} catch {
 			throw new Error("Model settings could not be loaded");
 		}

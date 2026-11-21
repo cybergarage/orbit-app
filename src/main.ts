@@ -3,6 +3,7 @@ import { app, BrowserWindow, ipcMain, dialog, nativeTheme } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Supervisor } from "./supervisor";
+import { openHostAgentProfile } from "./host-profile";
 let window: BrowserWindow;
 let supervisor: Supervisor;
 let closing = false;
@@ -10,7 +11,21 @@ let timer: NodeJS.Timeout;
 const testMode = process.env.ORBIT_APP_TEST === "1";
 if (testMode && process.env.ORBIT_APP_DATA)
 	app.setPath("userData", process.env.ORBIT_APP_DATA);
-if (!app.requestSingleInstanceLock()) app.quit();
+const hostAgent = process.env.ORBIT_APP_HOST_AGENT === "1";
+if (hostAgent) {
+	try {
+		app.setPath("userData", openHostAgentProfile(app.getPath("userData")));
+	} catch (error) {
+		dialog.showErrorBox(
+			"Orbit App could not open the Host Agent profile",
+			String(error),
+		);
+		app.exit(1);
+		throw error;
+	}
+}
+const profileOwned = app.requestSingleInstanceLock();
+if (!profileOwned) app.quit();
 const entry = path.join(__dirname, "index.html");
 async function openWindow() {
 	if (!supervisor || closing) return;
@@ -64,6 +79,8 @@ async function start() {
 			testMode && process.env.ORBIT_APP_LIVE !== "1"
 				? { extract: async () => ({ text: '{"candidates":[]}' }) }
 				: undefined,
+			undefined,
+			hostAgent,
 		);
 		await supervisor.init();
 		nativeTheme.themeSource = supervisor.store.state.appearance ?? "system";
@@ -98,7 +115,7 @@ async function start() {
 		app.exit(1);
 	}
 }
-void start();
+if (profileOwned) void start();
 app.on("before-quit", (event) => {
 	if (closing) return;
 	event.preventDefault();

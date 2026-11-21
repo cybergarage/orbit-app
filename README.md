@@ -86,6 +86,35 @@ host and worker locks and the CI source checkout use that same artifact/pin.
 This artifact was reproduced with Node 26.10.0 and npm 11.19.1 on macOS
 arm64; verification on other platforms uses the checked-in bytes.
 
+### Host Agent development profile
+
+```sh
+npm run worker:build
+ORBIT_APP_HOST_AGENT=1 npm run dev
+```
+
+This opt-in creates a new, marked sibling App profile. It does not open,
+migrate, or reuse existing chats or modify their Core storage registrations.
+The default remains the original worker path. The selected host profile runs
+one Agent in Electron; model transport, session/journal state, and Project
+source leases stay on the host. No normal Agent container is started, even if
+the reader fails or Docker is unavailable. The existing SQLite Project catalog
+helper is temporarily retained: that process receives only its catalog,
+never model credentials, a session directory, or the workspace.
+
+This slice supports chat and Docker-only `read`, `list`, `glob`, and `grep`.
+The isolated reader is labeled and pinned by local image ID before admission,
+uses a read-only nonrecursive workspace mount, and has no network or state.
+Bash, file changes, project-native build/test, plugins, MCP, and data
+initialization are unavailable in this mode; an unavailable tool never
+executes on the host. Model selection uses the normal trusted host models
+and credentials, not workspace-specific provider overrides. Host restart
+does not replay interrupted runs or clear Core writer ownership. The
+app can refuse further work if owned cleanup is not confirmed.
+
+Legacy profile migration, transferring the catalog out of Docker, and the
+eventual removal of the default Agent worker remain separate steps.
+
 ### Workspace-only execution boundary (development)
 
 A separate Docker image handles one prepared `write` or `edit` request at a

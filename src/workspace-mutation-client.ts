@@ -1,3 +1,4 @@
+import type { ToolResult } from "@cybergarage/orbit";
 import { spawn } from "node:child_process";
 import { encodeWorkspaceRequest } from "./workspace-request";
 
@@ -167,7 +168,7 @@ export async function executeWorkspaceMutation(
 	}
 }
 
-function observationError() {
+function observationError(): ToolResult {
 	return {
 		content: [
 			{
@@ -179,7 +180,10 @@ function observationError() {
 	};
 }
 
-function observationAcknowledged(value: unknown, tool: string) {
+function observationAcknowledged(
+	value: unknown,
+	tool: string,
+): value is ToolResult {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const answer = value as Record<string, unknown>;
 	if (
@@ -294,6 +298,7 @@ export async function executeWorkspaceObservation(
 	operation: Parameters<typeof encodeWorkspaceRequest>[1],
 	signal: AbortSignal,
 	ports: MutationPorts,
+	sourceWorkspace = "/workspace",
 ) {
 	if (signal.aborted) return observationError();
 	let frame: string;
@@ -303,7 +308,7 @@ export async function executeWorkspaceObservation(
 			!["read", "list", "glob", "grep"].includes(operation.name)
 		)
 			return observationError();
-		frame = encodeWorkspaceRequest("/workspace", operation);
+		frame = encodeWorkspaceRequest(sourceWorkspace, operation);
 		if (Buffer.byteLength(frame) > 32 * 1024) return observationError();
 	} catch {
 		return observationError();

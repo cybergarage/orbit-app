@@ -210,6 +210,7 @@ function App() {
 	const [state, setState] = useState<Snapshot>({ projects: [], schedules: [] });
 	const [view, setView] = useState("home");
 	const [debug, setDebug] = useState(false);
+	const hostAgentPreview = state.executionBackend === "host-readonly";
 	const [savingName, setSavingName] = useState(false);
 	const [projectId, setProject] = useState("");
 	const [sessionId, setSession] = useState("");
@@ -781,6 +782,7 @@ function App() {
 										)}
 										<button
 											type="button"
+											disabled={hostAgentPreview}
 											onClick={() =>
 												void action(async () =>
 													setArtifacts(
@@ -805,7 +807,9 @@ function App() {
 								)}
 							</div>
 							<small className="conversation-footer">
-								Workspaces persist; active tasks stop when the app exits.
+								{hostAgentPreview
+									? "Host Agent preview: only Docker read/search tools are available."
+									: "Workspaces persist; active tasks stop when the app exits."}
 							</small>
 						</>
 					) : (
@@ -818,8 +822,9 @@ function App() {
 							</p>
 							{composer}
 							<small>
-								Tasks run locally in an isolated worker. Review writes and
-								commands before they execute.
+								{hostAgentPreview
+									? "Host Agent preview: only Docker read/search tools are available."
+									: "Tasks run locally in an isolated worker. Review writes and commands before they execute."}
 							</small>
 						</div>
 					)}

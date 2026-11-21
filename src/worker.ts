@@ -159,6 +159,15 @@ export async function workerLaunchArgs(
 	return dockerArgs(name, workspace, core, admitted);
 }
 
+export function admitWorkspaceReaderImage() {
+	return admitDockerImage(
+		image,
+		workspaceReadsLabel,
+		"workspace reader",
+		command,
+	);
+}
+
 async function admitDockerImage(
 	imageRef: string,
 	label: string,

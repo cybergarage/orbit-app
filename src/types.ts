@@ -76,6 +76,7 @@ export interface Snapshot {
 	maintenance?: { error?: string; complete: boolean };
 	submissionSequence?: number;
 	appearance?: "system" | "light" | "dark";
+	executionBackend?: "host-readonly";
 	namesVersion?: number;
 	executions?: Execution[];
 	projects: Project[];
@@ -84,6 +85,8 @@ export interface Snapshot {
 		projectId: string;
 		sessionId: string;
 		containerName?: string;
+		runtime?: "host-v1";
+		readerOwner?: string;
 		workspaceMutations?: boolean;
 		workspaceReads?: boolean;
 	};

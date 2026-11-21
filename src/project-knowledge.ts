@@ -14,7 +14,7 @@ import type {
 } from "@cybergarage/orbit";
 type CoreKnowledge = typeof import("@cybergarage/orbit");
 
-import { ContainerCoreNames } from "./core-names";
+import { ContainerCoreNames, type CoreNames } from "./core-names";
 import type { Store } from "./store";
 import {
 	acquireContainerSources,
@@ -31,9 +31,12 @@ export const extractLocalKnowledge: KnowledgeExtractor = async (
 };
 
 class RemoteProjectCatalog implements ProjectStore {
-	private metadata: ContainerCoreNames;
-	constructor(private root: string) {
-		this.metadata = new ContainerCoreNames(root);
+	private metadata: CoreNames;
+	constructor(
+		private root: string,
+		metadata?: CoreNames,
+	) {
+		this.metadata = metadata ?? new ContainerCoreNames(root);
 	}
 	async query<Q extends ProjectQuery>(
 		query: Q,
@@ -51,7 +54,7 @@ class RemoteProjectCatalog implements ProjectStore {
 		});
 	}
 	async close() {
-		await this.metadata.close();
+		await this.metadata.close?.();
 	}
 }
 
@@ -74,6 +77,7 @@ export class ProjectKnowledge {
 		private idle: () => boolean,
 		private acquire: AcquireSources = acquireContainerSources,
 		private extract: KnowledgeExtractor = extractLocalKnowledge,
+		private metadata?: CoreNames,
 	) {}
 
 	private get kit(): CoreKnowledge {
@@ -87,7 +91,8 @@ export class ProjectKnowledge {
 	}
 	async init(catalog?: ProjectStore) {
 		this.core = await import("@cybergarage/orbit");
-		this.catalog = catalog ?? new RemoteProjectCatalog(this.store.root);
+		this.catalog =
+			catalog ?? new RemoteProjectCatalog(this.store.root, this.metadata);
 		this.scheduleWakeup();
 	}
 	gate<T>(work: () => Promise<T>): Promise<T> {

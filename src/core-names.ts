@@ -93,7 +93,8 @@ export class ContainerCoreNames implements CoreNames {
 				throw new Error("Core storage directory is missing");
 		} else {
 			await fs.mkdir(catalog, { recursive: true, mode: 0o700 });
-			await fs.mkdir(core, { recursive: true, mode: 0o700 });
+			if (!this.helperOptions.catalogOnly)
+				await fs.mkdir(core, { recursive: true, mode: 0o700 });
 		}
 		return runMetadataHelper(this.root, core, request, this.helperOptions);
 	}

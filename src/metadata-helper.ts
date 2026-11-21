@@ -150,6 +150,7 @@ export async function recoverMetadataHelper(root: string, transport = docker) {
 	await removeOwned(record, transport);
 }
 export interface MetadataHelperOptions {
+	catalogOnly?: boolean;
 	transport?: MetadataTransport;
 	timeoutMs?: number;
 	outputLimit?: number;
@@ -163,6 +164,26 @@ export async function runMetadataHelper(
 	root = path.resolve(root);
 	core = path.resolve(core);
 	const transport = options.transport ?? docker;
+	const catalog = path.join(root, "catalog");
+	if (
+		options.catalogOnly &&
+		(core !== catalog ||
+			![
+				"catalog-query",
+				"catalog-mutate",
+				"create-project",
+				"read-project",
+				"rename-project",
+				"archive-project",
+			].includes(String(request.command)))
+	)
+		throw new Error("Catalog-only helper cannot access sessions");
+	if (
+		options.catalogOnly &&
+		(!(await fs.lstat(catalog)).isDirectory() ||
+			(await fs.realpath(catalog)) !== catalog)
+	)
+		throw new Error("Catalog-only helper requires its canonical App catalog");
 	const input = `${JSON.stringify(request)}\n`;
 	if (await readRecord(root))
 		throw new MetadataRecoveryRequired(
@@ -187,13 +208,18 @@ export async function runMetadataHelper(
 			`Cannot establish metadata helper ownership record: ${String(error)}`,
 		);
 	}
-	const catalog = path.join(root, "catalog");
 	const args = dockerArgs(record.name, catalog, core);
 	args[0] = "create";
 	const image = args.pop();
 	if (!image) throw new Error("Missing worker image");
 	const mount = args.findIndex((arg) => arg.endsWith("dst=/workspace"));
 	args[mount] = `type=bind,src=${catalog},dst=/catalog`;
+	if (options.catalogOnly) {
+		const state = args.findIndex((arg) => arg.endsWith("dst=/state"));
+		if (state < 1 || args[state - 1] !== "--mount")
+			throw new Error("State mount not found");
+		args.splice(state - 1, 2);
+	}
 	args.push(
 		"--label",
 		`org.cybergarage.orbit-app.metadata-owner=${record.token}`,

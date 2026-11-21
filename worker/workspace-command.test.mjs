@@ -28,6 +28,7 @@ test("declines arbitrary shell/env/config, invalid timeout, flags and unusual pa
 		frame("shell-smoke", { env: { PATH: "other" } }),
 		frame("shell-smoke", { timeoutMs: 16_000 }),
 		frame("git-tracked-files", { args: ["--debug"] }),
+		frame("git-tracked-files", { gitView: "workspace metadata" }),
 		...[
 			"../main.mjs",
 			"dir/../main.mjs",
@@ -92,13 +93,26 @@ test("reads tracked index entries only, independent of source repository config"
 		path.join(root, ".git", "config"),
 		"invalid repository configuration\n",
 	);
-	const observed = await command(frame("git-tracked-files"), { root });
+	const gitView = await workspace(t);
+	await fs.mkdir(path.join(gitView, "objects"));
+	await fs.mkdir(path.join(gitView, "refs", "heads"), { recursive: true });
+	await fs.writeFile(path.join(gitView, "HEAD"), "ref: refs/heads/main\n");
+	const index = await fs.readFile(path.join(root, ".git", "index"));
+	const observed = await command(frame("git-tracked-files"), { root, gitView });
 	assert.deepEqual(observed, {
 		status: "exited",
 		exitCode: 0,
 		stdout: "tracked.txt\0",
 		stderr: "",
 	});
+	assert.deepEqual(await fs.readFile(path.join(root, ".git", "index")), index);
+	assert.deepEqual((await fs.readdir(gitView)).sort(), [
+		"HEAD",
+		"objects",
+		"refs",
+	]);
+	assert.deepEqual(await fs.readdir(path.join(gitView, "objects")), []);
+	assert.deepEqual(await fs.readdir(path.join(gitView, "refs", "heads")), []);
 });
 
 test("rejects linked files/metadata, and separates timeout, cancellation and oversized stdout from exit", {

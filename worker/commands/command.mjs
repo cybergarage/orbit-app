@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const ROOT = "/workspace";
+const GIT_VIEW = "/opt/orbit-index-view";
 const MAX_REQUEST = 4096;
 const MAX_SOURCE = 1024 * 1024;
 const MAX_OUTPUT = 16 * 1024;
@@ -91,7 +92,7 @@ function openRegular(root, parts) {
 	}
 }
 
-function commandPlan(frame, root) {
+function commandPlan(frame, root, gitView) {
 	const env = { ...baseEnv };
 	if (frame.operation === "shell-smoke")
 		return {
@@ -105,42 +106,28 @@ function commandPlan(frame, root) {
 			env,
 		};
 	if (frame.operation === "git-tracked-files") {
-		let fd;
-		let temporary;
-		try {
-			fd = openRegular(root, [".git", "index"]);
-			// Only consume the index bytes. Do not load the source repository's
-			// config, hooks, linked worktree locations or credential helpers.
-			temporary = fs.mkdtempSync("/tmp/orbit-command-git-");
-			fs.mkdirSync(path.join(temporary, "objects"));
-			fs.mkdirSync(path.join(temporary, "refs", "heads"), { recursive: true });
-			fs.writeFileSync(path.join(temporary, "HEAD"), "ref: refs/heads/main\n");
-			return {
-				exe: "/usr/bin/git",
-				args: ["--no-pager", "ls-files", "--cached", "-z"],
-				env: {
-					...env,
-					GIT_DIR: temporary,
-					GIT_WORK_TREE: root,
-					GIT_INDEX_FILE: "/proc/self/fd/3",
-					GIT_CONFIG_NOSYSTEM: "1",
-					GIT_CONFIG_GLOBAL: "/dev/null",
-					GIT_TERMINAL_PROMPT: "0",
-					GIT_OPTIONAL_LOCKS: "0",
-					GIT_NO_LAZY_FETCH: "1",
-				},
-				fd,
-				close() {
-					fs.closeSync(fd);
-					fs.rmSync(temporary, { recursive: true, force: true });
-				},
-			};
-		} catch (error) {
-			if (fd !== undefined) fs.closeSync(fd);
-			if (temporary !== undefined)
-				fs.rmSync(temporary, { recursive: true, force: true });
-			throw error;
-		}
+		// Use the image-owned read-only view and consume only the index bytes,
+		// never the source repository's config, hooks or linked locations.
+		const fd = openRegular(root, [".git", "index"]);
+		return {
+			exe: "/usr/bin/git",
+			args: ["--no-pager", "ls-files", "--cached", "-z"],
+			env: {
+				...env,
+				GIT_DIR: gitView,
+				GIT_WORK_TREE: root,
+				GIT_INDEX_FILE: "/proc/self/fd/3",
+				GIT_CONFIG_NOSYSTEM: "1",
+				GIT_CONFIG_GLOBAL: "/dev/null",
+				GIT_TERMINAL_PROMPT: "0",
+				GIT_OPTIONAL_LOCKS: "0",
+				GIT_NO_LAZY_FETCH: "1",
+			},
+			fd,
+			close() {
+				fs.closeSync(fd);
+			},
+		};
 	}
 	const fd = openRegular(root, frame.file.split("/"));
 	fs.closeSync(fd);
@@ -212,7 +199,11 @@ function invoke(plan, root, timeout, signal) {
 
 export async function command(
 	frame,
-	{ root = ROOT, signal = new AbortController().signal } = {},
+	{
+		root = ROOT,
+		gitView = GIT_VIEW,
+		signal = new AbortController().signal,
+	} = {},
 ) {
 	let plan;
 	try {
@@ -221,7 +212,7 @@ export async function command(
 		return rejected(error.message);
 	}
 	try {
-		plan = commandPlan(frame, root);
+		plan = commandPlan(frame, root, gitView);
 	} catch {
 		return rejected(
 			frame.operation === "git-tracked-files"

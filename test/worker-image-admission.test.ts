@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dockerArgs, dockerPath, image, workerLaunchArgs } from "../src/worker";
+import {
+	admitWorkspaceReaderImage,
+	dockerArgs,
+	dockerPath,
+	image,
+	standaloneWorkspaceReaderImage,
+	workerLaunchArgs,
+} from "../src/worker";
 
 const name = "synthetic-worker";
 const workspace = "/synthetic/workspace";
@@ -37,7 +44,10 @@ test("opt-in uses the admitted immutable local image even if the tag moves", asy
 		async (executable, inspect, timeout) => {
 			assert.equal(executable, dockerPath);
 			assert.deepEqual(inspect.slice(0, 3), ["image", "inspect", "--format"]);
-			assert.match(inspect[3], /org\.cybergarage\.orbit-app\.workspace-mutations/);
+			assert.match(
+				inspect[3],
+				/org\.cybergarage\.orbit-app\.workspace-mutations/,
+			);
 			assert.equal(inspect[4], image);
 			assert.equal(timeout, 5_000);
 			inspections++;
@@ -55,9 +65,40 @@ test("opt-in uses the admitted immutable local image even if the tag moves", asy
 });
 
 test("default Docker worker launch is unchanged and never inspects a tag", async () => {
-	const args = await workerLaunchArgs(name, workspace, state, false, async () => {
-		assert.fail("Default launch must not inspect a worker image");
-	});
+	const args = await workerLaunchArgs(
+		name,
+		workspace,
+		state,
+		false,
+		async () => {
+			assert.fail("Default launch must not inspect a worker image");
+		},
+	);
 	assert.deepEqual(args, dockerArgs(name, workspace, state));
 	assert.equal(args.at(-1), image);
+});
+
+test("Host reader accepts only its standalone capability and never probes legacy fallback", async () => {
+	let calls = 0;
+	const value = await admitWorkspaceReaderImage(async (exe, args) => {
+		calls++;
+		assert.equal(exe, dockerPath);
+		assert.match(args[3], /workspace-reader-standalone/);
+		assert.equal(args[4], standaloneWorkspaceReaderImage);
+		return `${admitted} 1\n`;
+	});
+	assert.equal(value, admitted);
+	assert.equal(calls, 1);
+	for (const old of [`${admitted} <no value>\n`, `${admitted} 0\n`]) {
+		let attempts = 0;
+		await assert.rejects(
+			admitWorkspaceReaderImage(async (_exe, args) => {
+				attempts++;
+				assert.equal(args[4], standaloneWorkspaceReaderImage);
+				return old;
+			}),
+			/requires the standalone Docker reader/,
+		);
+		assert.equal(attempts, 1);
+	}
 });

@@ -52,6 +52,21 @@ open "release/Orbit App-darwin-arm64/Orbit App.app"
 
 The unsigned arm64 app still requires Docker, Ollama, and the locally built worker image. Docker and models are not bundled; signing and notarization are not included.
 
+### Verify Electron-host SQLite independently
+
+On a native macOS arm64 development machine with Xcode command-line tools,
+Node 26.10.0 and npm 11.19.1, run `npm run test:electron-sqlite` after
+installing the normal locked App dependencies. The proof builds the existing
+locked `better-sqlite3` source against the exact Electron 44.5.1 headers
+(checked by SHA-256), packages a separate GUI-less test app with the native
+module outside ASAR, then opens, writes, and reopens a synthetic Core Project
+catalog inside its real Electron main process. It expects Electron ABI 149.
+
+The proof downloads the pinned official headers; Electron Packager may also
+fetch the exact Electron binary on a cold cache. It does not replace the normal Node test addon, use a real
+profile, start Docker, or move the App catalog to the host. The regular App
+build and runtime are unchanged until the separate catalog integration.
+
 ## Prototype features and limits
 
 - Home/new-chat, project creation and editing with optional directory/instructions, session rename/move, conversation model selection, runtime health, operation approvals, cancellation, saved history, and top-level artifact listing.
@@ -85,6 +100,39 @@ commit and artifact hash are recorded in worker/packages/core-artifact.json;
 host and worker locks and the CI source checkout use that same artifact/pin.
 This artifact was reproduced with Node 26.10.0 and npm 11.19.1 on macOS
 arm64; verification on other platforms uses the checked-in bytes.
+
+### Host Agent development profile
+
+On macOS arm64 with the native build tools above:
+
+```sh
+npm run worker:reader:build
+npm run package:host-agent
+ORBIT_APP_HOST_AGENT=1 "release/host-agent/Orbit App-darwin-arm64/Orbit App.app/Contents/MacOS/Orbit App"
+```
+
+The opt-in selects a new, marked `-host-agent-native-v2` sibling profile.
+It does not open, migrate, or reuse the older Docker-backed preview or default
+profile. Electron owns the Agent, model transport, session/journal state,
+Project source leases, and one SQLite catalog shared by Project operations
+and Project Knowledge. The App drains the catalog before releasing its
+profile lock. Missing or invalid native SQLite and retained helper recovery
+markers refuse startup; there is no SQLite container fallback. The normal
+App package, profile and Docker-backed default route are unchanged.
+
+This slice supports chat and Docker-only `read`, `list`, `glob`, and `grep`.
+The admitted workspace reader has one read-only nonrecursive workspace bind
+and no network or state. Bash, file changes, project-native build/test,
+plugins, MCP, and data initialization remain unavailable in this mode.
+The Host Agent uses the standalone image below and does not fall back to the
+legacy worker image or a host read. Interrupted runs are not replayed.
+Removal of the legacy default Agent is a separate change.
+
+Run `npm run test:host-catalog` for a disposable actual packaged App smoke:
+create a synthetic Project over normal App IPC, quit and relaunch with the
+same profile, verify its ID, and verify that removing the disposable bundle's
+native addon fails without changing catalog bytes. The smoke points Docker
+at an unavailable endpoint and does not contact model providers.
 
 ### Workspace-only execution boundary (development)
 
@@ -140,18 +188,18 @@ entries, 8 MiB per file and 32 MiB scanned per operation. If a read limit is
 exceeded the tool reports a failure, not a partial success or a fallback.
 
 
-### Standalone Docker reader image (not selected by the App)
+### Standalone Docker reader image for the Host Agent
 
 ```sh
-docker build -f worker/reader/Dockerfile -t orbit-app-workspace-reader:local worker
+npm run worker:reader:build
 node --import tsx scripts/workspace-reader-image-smoke.ts
 ```
 
 This image packages only the existing bounded `read`, `list`, `glob`, and
 `grep` implementation and its lock-pinned search libraries. Its build context
 excludes the Orbit package, legacy Agent, metadata helpers, and session data.
-The image has no Orbit Core or application SQLite module. The App does not
-select it yet; existing Agent and tool routing have not changed. CI verifies
+The image has no Orbit Core or application SQLite module. Only the opt-in
+Host Agent selects this image. Default and legacy tool routing are unchanged. CI verifies
 execution by immutable image ID with one nonrecursive, read-only workspace
 bind, no network, no state or catalog mount, and only disposable test files.
 

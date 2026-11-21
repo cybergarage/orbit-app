@@ -58,6 +58,7 @@ export class Store {
 	constructor(
 		readonly root: string,
 		private readonly names: CoreNames = new ContainerCoreNames(root),
+		private readonly hostAgent = false,
 	) {}
 	async init(readOnly = false) {
 		await assertAppProfileRoot(this.root);
@@ -205,6 +206,7 @@ export class Store {
 			: undefined;
 		const {
 			maintenance: _maintenance,
+			executionBackend: _executionBackend,
 			appearance: _appearance,
 			defaultModel: _defaultModel,
 			health: _health,
@@ -420,6 +422,7 @@ export class Store {
 		};
 		await this.names.call(this.core(p.id), {
 			command: "create-session",
+			...(this.hostAgent ? { hostWorkspace: s.workspace } : {}),
 			sessionId: s.id,
 			name: s.name,
 			operationId: randomUUID(),

@@ -51,6 +51,8 @@ jobs:
         run: node --import tsx scripts/workspace-reader-image-smoke.ts
       - name: Verify the opt-in App Docker route with a synthetic model
         run: node --import tsx scripts/workspace-app-docker-smoke.ts
+      - name: Verify the isolated Host Agent with the standalone Docker reader
+        run: node --import tsx scripts/host-agent-docker-smoke.ts
       - name: Verify the experimental fixed workspace command contract
         run: node --import tsx scripts/workspace-command-docker-smoke.ts
       # Host-wide lsof inspection must not race other fixture Docker mounts.

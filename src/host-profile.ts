@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const marker = ".orbit-app-host-agent-v1";
-const version = "orbit-app-host-agent-v1\n";
+const marker = ".orbit-app-host-agent-native-v2";
+const version = "orbit-app-host-agent-native-v2\n";
 
 /** Never adopt, move, copy or overwrite an existing App profile. */
 export function openHostAgentProfile(legacyRoot: string): string {
@@ -12,7 +12,7 @@ export function openHostAgentProfile(legacyRoot: string): string {
 	// On macOS an App path may be reached via a system alias. Register the
 	// canonical parent before selecting the new sibling and requesting a lock.
 	const parent = fs.realpathSync(path.dirname(base));
-	const root = path.join(parent, `${path.basename(base)}-host-agent-v1`);
+	const root = path.join(parent, `${path.basename(base)}-host-agent-native-v2`);
 	const file = path.join(root, marker);
 	try {
 		fs.mkdirSync(root, { mode: 0o700 });
@@ -20,6 +20,12 @@ export function openHostAgentProfile(legacyRoot: string): string {
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 	}
+	assertNativeHostAgentProfile(root);
+	return root;
+}
+
+export function assertNativeHostAgentProfile(root: string) {
+	const file = path.join(root, marker);
 	const directory = fs.lstatSync(root);
 	const uid = process.getuid?.();
 	if (
@@ -48,5 +54,4 @@ export function openHostAgentProfile(legacyRoot: string): string {
 		throw new Error(
 			"Host Agent refused an unmarked or unsafe profile; no legacy profile was opened",
 		);
-	return root;
 }

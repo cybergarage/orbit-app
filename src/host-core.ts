@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CoreNames } from "./core-names";
-import { ContainerCoreNames } from "./core-names";
 import type { AcquireSources } from "./source-leases";
 
 const hosts = new Set([
@@ -31,7 +30,7 @@ export async function hostRepository(core: string) {
 	});
 }
 
-/** Pure catalog IPC is temporary; no session directory goes to that helper. */
+/** The admitted host catalog and session repository share App ownership. */
 export class HostCoreNames implements CoreNames {
 	private readonly catalog: CoreNames;
 	private tail: Promise<unknown> = Promise.resolve();
@@ -39,10 +38,9 @@ export class HostCoreNames implements CoreNames {
 
 	constructor(
 		private root: string,
-		catalog?: CoreNames,
+		catalog: CoreNames,
 	) {
-		this.catalog =
-			catalog ?? new ContainerCoreNames(root, { catalogOnly: true });
+		this.catalog = catalog;
 	}
 
 	call(core: string, request: Record<string, unknown>) {
@@ -74,7 +72,6 @@ export class HostCoreNames implements CoreNames {
 		if (metadata.has(name)) {
 			if (name === "create-project") {
 				await fs.mkdir(core, { recursive: true, mode: 0o700 });
-				await fs.mkdir(catalog, { recursive: true, mode: 0o700 });
 			}
 			return this.catalog.call(catalog, request);
 		}

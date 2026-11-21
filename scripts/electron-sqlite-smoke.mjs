@@ -8,6 +8,9 @@ import path from "node:path";
 import { packager } from "@electron/packager";
 
 const root = path.resolve(import.meta.dirname, "..");
+const mode = process.argv[2] ?? "probe";
+assert.ok(["probe", "host-proof", "host-package"].includes(mode));
+const probe = mode === "probe";
 const electronVersion = "44.5.1";
 const sqliteVersion = "12.11.1";
 const headersHash =
@@ -98,13 +101,19 @@ try {
 		path.join(appRoot, "package.json"),
 		JSON.stringify({
 			...manifest,
-			main: "probe.cjs",
+			main: probe ? "probe.cjs" : manifest.main,
 		}),
 	);
-	await fs.copyFile(
-		path.join(root, "scripts/electron-sqlite-probe-main.cjs"),
-		path.join(appRoot, "probe.cjs"),
-	);
+	if (probe) {
+		await fs.copyFile(
+			path.join(root, "scripts/electron-sqlite-probe-main.cjs"),
+			path.join(appRoot, "probe.cjs"),
+		);
+	} else {
+		await fs.cp(path.join(root, "dist"), path.join(appRoot, "dist"), {
+			recursive: true,
+		});
+	}
 	run(
 		process.execPath,
 		[npm, "ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"],
@@ -163,12 +172,20 @@ try {
 		process.env,
 		240_000,
 	);
-	const out = path.join(scratch, "packaged");
+	const out =
+		mode === "host-package"
+			? path.join(root, "release/host-agent")
+			: path.join(scratch, "packaged");
+	const name = probe ? "OrbitSQLiteProbe" : "Orbit App";
+	const appBundleId = probe
+		? "org.cybergarage.orbit-app.sqliteprobe"
+		: "org.cybergarage.orbit-app";
 	const binaries = await packager({
 		dir: appRoot,
 		out,
-		name: "OrbitSQLiteProbe",
-		appBundleId: "org.cybergarage.orbit-app.sqliteprobe",
+		name,
+		appBundleId,
+		overwrite: mode === "host-package",
 		electronVersion,
 		platform: "darwin",
 		arch: "arm64",
@@ -176,28 +193,38 @@ try {
 		// The stage was installed with npm ci --omit=dev. Do not walk omitted dev packages.
 		prune: false,
 		ignore: [/^\/worker(\/|$)/],
-		extendInfo: { LSUIElement: true },
+		...(probe ? { extendInfo: { LSUIElement: true } } : {}),
 	});
 	assert.equal(binaries.length, 1);
-	const emitted = path.join(
-		binaries[0],
-		"OrbitSQLiteProbe.app",
-		"Contents/MacOS/OrbitSQLiteProbe",
-	);
-	const data = path.join(scratch, "synthetic");
-	await fs.mkdir(path.join(data, "profile"), { recursive: true, mode: 0o700 });
-	const env = { ...process.env, ORBIT_SQLITE_PROBE_ROOT: data };
-	delete env.ELECTRON_RUN_AS_NODE;
-	delete env.NODE_OPTIONS;
-	const output = run(
-		emitted,
-		["--enable-logging=stderr"],
-		scratch,
-		env,
-		35_000,
-	);
-	assert.match(output, /ABI 149: Core SQLite opened, wrote and reopened/);
-	process.stdout.write(output);
+	const bundle = path.join(binaries[0], `${name}.app`);
+	const emitted = path.join(bundle, "Contents/MacOS", name);
+	if (!probe) {
+		if (mode === "host-package") console.log(bundle);
+		else {
+			const { verifyPackagedCatalog } = await import(
+				"./host-catalog-app-smoke.mjs"
+			);
+			await verifyPackagedCatalog(bundle, emitted, scratch);
+		}
+	} else {
+		const data = path.join(scratch, "synthetic");
+		await fs.mkdir(path.join(data, "profile"), {
+			recursive: true,
+			mode: 0o700,
+		});
+		const env = { ...process.env, ORBIT_SQLITE_PROBE_ROOT: data };
+		delete env.ELECTRON_RUN_AS_NODE;
+		delete env.NODE_OPTIONS;
+		const output = run(
+			emitted,
+			["--enable-logging=stderr"],
+			scratch,
+			env,
+			35_000,
+		);
+		assert.match(output, /ABI 149: Core SQLite opened, wrote and reopened/);
+		process.stdout.write(output);
+	}
 } finally {
 	await fs.rm(scratch, { recursive: true, force: true });
 }

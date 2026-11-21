@@ -103,32 +103,35 @@ arm64; verification on other platforms uses the checked-in bytes.
 
 ### Host Agent development profile
 
+On macOS arm64 with the native build tools above:
+
 ```sh
-npm run worker:build
-ORBIT_APP_HOST_AGENT=1 npm run dev
+npm run worker:build  # still supplies the read-only workspace runner
+npm run package:host-agent
+ORBIT_APP_HOST_AGENT=1 "release/host-agent/Orbit App-darwin-arm64/Orbit App.app/Contents/MacOS/Orbit App"
 ```
 
-This opt-in creates a new, marked sibling App profile. It does not open,
-migrate, or reuse existing chats or modify their Core storage registrations.
-The default remains the original worker path. The selected host profile runs
-one Agent in Electron; model transport, session/journal state, and Project
-source leases stay on the host. No normal Agent container is started, even if
-the reader fails or Docker is unavailable. The existing SQLite Project catalog
-helper is temporarily retained: that process receives only its catalog,
-never model credentials, a session directory, or the workspace.
+The opt-in selects a new, marked `-host-agent-native-v2` sibling profile.
+It does not open, migrate, or reuse the older Docker-backed preview or default
+profile. Electron owns the Agent, model transport, session/journal state,
+Project source leases, and one SQLite catalog shared by Project operations
+and Project Knowledge. The App drains the catalog before releasing its
+profile lock. Missing or invalid native SQLite and retained helper recovery
+markers refuse startup; there is no SQLite container fallback. The normal
+App package, profile and Docker-backed default route are unchanged.
 
 This slice supports chat and Docker-only `read`, `list`, `glob`, and `grep`.
-The isolated reader is labeled and pinned by local image ID before admission,
-uses a read-only nonrecursive workspace mount, and has no network or state.
-Bash, file changes, project-native build/test, plugins, MCP, and data
-initialization are unavailable in this mode; an unavailable tool never
-executes on the host. Model selection uses the normal trusted host models
-and credentials, not workspace-specific provider overrides. Host restart
-does not replay interrupted runs or clear Core writer ownership. The
-app can refuse further work if owned cleanup is not confirmed.
+The admitted workspace reader has one read-only nonrecursive workspace bind
+and no network or state. Bash, file changes, project-native build/test,
+plugins, MCP, and data initialization remain unavailable in this mode.
+Interrupted runs are not replayed. The standalone reader and removal of
+the legacy default Agent are separate changes.
 
-Legacy profile migration, transferring the catalog out of Docker, and the
-eventual removal of the default Agent worker remain separate steps.
+Run `npm run test:host-catalog` for a disposable actual packaged App smoke:
+create a synthetic Project over normal App IPC, quit and relaunch with the
+same profile, verify its ID, and verify that removing the disposable bundle's
+native addon fails without changing catalog bytes. The smoke points Docker
+at an unavailable endpoint and does not contact model providers.
 
 ### Workspace-only execution boundary (development)
 

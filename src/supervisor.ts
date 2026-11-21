@@ -7,6 +7,7 @@ import {
 import type { KnowledgeExtractor } from "@cybergarage/orbit";
 import type { AcquireSources } from "./source-leases";
 import { HostAgentRun } from "./host-agent";
+import { NativeProjectCatalog } from "./native-catalog";
 import { HostCoreNames, acquireHostSources } from "./host-core";
 import { ProjectKnowledge } from "./project-knowledge";
 import { AppInitialization } from "./initialization-host";
@@ -67,6 +68,7 @@ export class Supervisor {
 	private workerFinished?: Promise<void>;
 	worker?: Worker | HostAgentRun;
 	private readonly models: ModelsHost;
+	private readonly nativeCatalog?: NativeProjectCatalog;
 	private admitted = false;
 	private ticking = false;
 	private currentRun?: RunControl;
@@ -106,7 +108,12 @@ export class Supervisor {
 		private readonly hostAgent = false,
 	) {
 		this.models = models ?? new CoreModelsHost(!this.hostAgent);
-		const metadata = this.hostAgent ? new HostCoreNames(root) : undefined;
+		this.nativeCatalog = this.hostAgent
+			? new NativeProjectCatalog(root)
+			: undefined;
+		const metadata = this.nativeCatalog
+			? new HostCoreNames(root, this.nativeCatalog)
+			: undefined;
 		this.store = new Store(root, metadata, this.hostAgent);
 		this.knowledge = new ProjectKnowledge(
 			this.store,
@@ -159,6 +166,7 @@ export class Supervisor {
 		} catch (error: any) {
 			if (error.code !== "ENOENT") throw error;
 		}
+		await this.nativeCatalog?.prepare();
 		await this.store.init();
 		if (this.hostAgent) this.store.state.executionBackend = "host-readonly";
 		else delete this.store.state.executionBackend;

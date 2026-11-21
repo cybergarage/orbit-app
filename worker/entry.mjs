@@ -27,7 +27,7 @@ function rpc(route, body, signal) {
 	return new Promise((resolve, reject) => {
 		const cancel = () => {
 			process.stdout.write(
-				`${JSON.stringify({ type: "mutation-cancel", id })}\n`,
+				`${JSON.stringify({ type: route === "workspace-observation" ? "observation-cancel" : "mutation-cancel", id })}\n`,
 			);
 			pending.delete(id);
 			reject(signal.reason);
@@ -127,15 +127,22 @@ async function run(config) {
 			outputReserve: 1024,
 		});
 		const workspaceExecutor =
-			config.workspaceMutations === true
-				? await createWorkspaceMutationExecutor(async (route, body, signal) => {
-						try {
-							return await rpc(route, body, signal);
-						} catch (error) {
-							mutationUncertain = true;
-							throw error;
-						}
-					})
+			config.workspaceMutations === true || config.workspaceReads === true
+				? await createWorkspaceMutationExecutor(
+						async (route, body, signal) => {
+							try {
+								return await rpc(route, body, signal);
+							} catch (error) {
+								if (route === "workspace-mutation") mutationUncertain = true;
+								throw error;
+							}
+						},
+						undefined,
+						{
+							mutations: config.workspaceMutations === true,
+							reads: config.workspaceReads === true,
+						},
+					)
 				: undefined;
 		agent = new Agent({
 			cwd: "/workspace",

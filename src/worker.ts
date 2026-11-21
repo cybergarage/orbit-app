@@ -4,11 +4,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
 	executeWorkspaceMutation,
+	executeWorkspaceObservation,
 	stopWorkspaceMutation,
 } from "./workspace-mutation-client";
 import { randomUUID } from "node:crypto";
 export const image = "docker.io/library/orbit-app-worker:project-memory-local";
 const workspaceMutationsLabel = "org.cybergarage.orbit-app.workspace-mutations";
+const workspaceReadsLabel = "org.cybergarage.orbit-app.workspace-reader";
 const workspaceRunnerLabel = "org.cybergarage.orbit-app.workspace-runner";
 export const dockerPath =
 	process.platform === "darwin" ? "/usr/local/bin/docker" : "docker";
@@ -76,8 +78,15 @@ export function dockerWorkspaceArgs(
 	name: string,
 	workspace: string,
 	runnerImage = workspaceImage,
+	readOnly = false,
 ) {
-	if (!/^orbit-app-workspace-[a-f0-9-]{36}$/.test(name))
+	if (
+		!(
+			readOnly
+				? /^orbit-app-workspace-[a-f0-9-]{36}-read$/
+				: /^orbit-app-workspace-[a-f0-9-]{36}$/
+		).test(name)
+	)
 		throw new Error("Invalid workspace worker name");
 	if (
 		!path.isAbsolute(workspace) ||
@@ -89,11 +98,13 @@ export function dockerWorkspaceArgs(
 	return [
 		...dockerIsolationArgs(name, "org.cybergarage.orbit-app.role=workspace"),
 		"--mount",
-		`type=bind,src=${workspace},dst=/workspace`,
+		`type=bind,src=${workspace},dst=/workspace${readOnly ? ",readonly,bind-recursive=disabled" : ""}`,
 		"--workdir",
 		"/workspace",
 		...workerUserArgs(),
+		...(readOnly ? ["--entrypoint", "node"] : []),
 		runnerImage,
+		...(readOnly ? ["/opt/worker/workspace-reader.mjs"] : []),
 	];
 }
 export function command(
@@ -136,7 +147,8 @@ export async function workerLaunchArgs(
 	run = command,
 	workerImage = image,
 ): Promise<string[]> {
-	if (!workspaceMutations) return dockerArgs(name, workspace, core, workerImage);
+	if (!workspaceMutations)
+		return dockerArgs(name, workspace, core, workerImage);
 	const admitted = await admitDockerImage(
 		workerImage,
 		workspaceMutationsLabel,
@@ -216,12 +228,16 @@ export async function modelRequest(
 		throw new Error(`Ollama ${r.status}: ${(await r.text()).slice(0, 1000)}`);
 	return r.json();
 }
-export function stopWorkerWorkspaceMutation(name: string) {
-	return stopWorkspaceMutation(name, {
-		docker: dockerPath,
-		command,
-		args: dockerWorkspaceArgs,
-	});
+export function stopWorkerWorkspaceMutation(name: string, readOnly = false) {
+	return stopWorkspaceMutation(
+		name,
+		{
+			docker: dockerPath,
+			command,
+			args: dockerWorkspaceArgs,
+		},
+		readOnly,
+	);
 }
 
 export class Worker {
@@ -239,6 +255,11 @@ export class Worker {
 	private workspaceIdentity?: { dev: number; ino: number };
 	private mutationUncertain = false;
 	private admittedMutationImage?: string;
+	private admittedReadImage?: string;
+	private observationCount = 0;
+	private observationTail = Promise.resolve();
+	private observationBlocked = false;
+	private observations = new Map<string, AbortController>();
 	private activeMutation?: {
 		id: string;
 		abort: AbortController;
@@ -246,6 +267,9 @@ export class Worker {
 	};
 	get workspaceMutationsEnabled(): boolean {
 		return this.config.workspaceMutations === true;
+	}
+	get workspaceReadsEnabled(): boolean {
+		return this.config.workspaceReads === true;
 	}
 	private async captureWorkspaceIdentity() {
 		const stat = await fs.lstat(this.workspace);
@@ -260,6 +284,7 @@ export class Worker {
 		if (
 			!this.workspaceMutationsEnabled ||
 			this.activeMutation ||
+			this.observations.size !== 0 ||
 			!this.workspaceIdentity ||
 			!this.admittedMutationImage
 		)
@@ -294,6 +319,64 @@ export class Worker {
 			this.activeMutation = undefined;
 		}
 	}
+	private async observe(id: string, operation: any) {
+		const unavailable = () => ({
+			content: [{ type: "text", text: "Workspace observation unavailable" }],
+			isError: true,
+		});
+		const runner = this.admittedReadImage;
+		if (!runner || !this.workspaceIdentity) return unavailable();
+		const abort = new AbortController();
+		const signal = AbortSignal.any([abort.signal, this.controller.signal]);
+		const admitted = performance.now();
+		this.observations.set(id, abort);
+		const task = this.observationTail.then(async () => {
+			if (
+				signal.aborted ||
+				this.observationBlocked ||
+				this.activeMutation ||
+				performance.now() - admitted > 12_000
+			)
+				return unavailable();
+			const current = await this.captureWorkspaceIdentity().catch(
+				() => undefined,
+			);
+			if (
+				!current ||
+				current.dev !== this.workspaceIdentity?.dev ||
+				current.ino !== this.workspaceIdentity.ino
+			)
+				return unavailable();
+			try {
+				return await executeWorkspaceObservation(
+					this.name,
+					this.workspace,
+					operation,
+					signal,
+					{
+						docker: dockerPath,
+						command: this.fixtureDocker.command ?? command,
+						args: (name, workspace) =>
+							dockerWorkspaceArgs(name, workspace, runner, true),
+					},
+				);
+			} catch {
+				// A read child whose absence cannot be confirmed blocks further use.
+				this.observationBlocked = true;
+				this.requestStop();
+				throw new Error("Workspace observation cleanup not confirmed");
+			}
+		});
+		this.observationTail = task.then(
+			() => {},
+			() => {},
+		);
+		try {
+			return await task;
+		} finally {
+			this.observations.delete(id);
+		}
+	}
 	constructor(
 		private workspace: string,
 		private core: string,
@@ -313,7 +396,7 @@ export class Worker {
 		} = {},
 	) {}
 	async start(): Promise<void> {
-		if (this.workspaceMutationsEnabled)
+		if (this.workspaceMutationsEnabled || this.workspaceReadsEnabled)
 			this.workspaceIdentity = await this.captureWorkspaceIdentity();
 		const args = await workerLaunchArgs(
 			this.name,
@@ -330,6 +413,17 @@ export class Worker {
 				"workspace runner",
 				this.fixtureDocker.command ?? command,
 			);
+		if (this.workspaceReadsEnabled) {
+			const selected = args.at(-1);
+			if (!selected) throw new Error("Workspace reader image not configured");
+			this.admittedReadImage = await admitDockerImage(
+				selected,
+				workspaceReadsLabel,
+				"workspace reader",
+				this.fixtureDocker.command ?? command,
+			);
+			args[args.length - 1] = this.admittedReadImage;
+		}
 		if (this.stopping)
 			return Promise.reject(Error("Worker cancelled before start"));
 		return new Promise((resolve, reject) => {
@@ -364,7 +458,9 @@ export class Worker {
 				try {
 					const e = JSON.parse(line);
 					if (e.type === "rpc") void this.rpc(e);
-					else if (e.type === "mutation-cancel") {
+					else if (e.type === "observation-cancel") {
+						this.observations.get(e.id)?.abort();
+					} else if (e.type === "mutation-cancel") {
 						const mutation = this.activeMutation;
 						if (mutation && mutation.id === e.id) mutation.abort.abort();
 					} else if (e.type === "approval") {
@@ -422,6 +518,7 @@ export class Worker {
 					...(this.workspaceMutationsEnabled
 						? { workspaceMutations: true }
 						: {}),
+					...(this.workspaceReadsEnabled ? { workspaceReads: true } : {}),
 				},
 			});
 		});
@@ -431,6 +528,7 @@ export class Worker {
 	}
 	async rpc(e: any) {
 		const mutation = e.route === "workspace-mutation";
+		const observation = e.route === "workspace-observation";
 		if (this.stopping || this.controller.signal.aborted) {
 			if (typeof e.id === "string" && /^[a-f0-9-]{36}$/.test(e.id)) {
 				this.event({
@@ -445,11 +543,14 @@ export class Worker {
 			typeof e.id !== "string" ||
 			!/^[a-f0-9-]{36}$/.test(e.id) ||
 			this.rpcIds.has(e.id) ||
-			!(mutation
-				? this.workspaceMutationsEnabled
-				: this.allowedRoutes().includes(e.route)) ||
-			++this.rpcCalls > 32 ||
-			this.rpcActive >= 2
+			!(observation
+				? this.workspaceReadsEnabled
+				: mutation
+					? this.workspaceMutationsEnabled
+					: this.allowedRoutes().includes(e.route)) ||
+			(observation
+				? ++this.observationCount > 24
+				: ++this.rpcCalls > 32 || this.rpcActive >= 2)
 		) {
 			this.event({
 				type: "error",
@@ -459,23 +560,29 @@ export class Worker {
 			return;
 		}
 		this.rpcIds.add(e.id);
-		this.rpcActive++;
+		if (!observation) this.rpcActive++;
 		try {
 			if (
 				["chat", "openai-chat", "anthropic-messages"].includes(e.route) &&
 				++this.modelCalls > 9
 			)
 				throw new Error("Model call budget exceeded");
-			const data = mutation
-				? await this.mutate(e.id, e.body)
-				: this.gateway
-					? await this.gateway.request(e.route, e.body, this.controller.signal)
-					: await modelRequest(
-							e.route,
-							e.body,
-							this.config.model,
-							this.controller.signal,
-						);
+			const data = observation
+				? await this.observe(e.id, e.body)
+				: mutation
+					? await this.mutate(e.id, e.body)
+					: this.gateway
+						? await this.gateway.request(
+								e.route,
+								e.body,
+								this.controller.signal,
+							)
+						: await modelRequest(
+								e.route,
+								e.body,
+								this.config.model,
+								this.controller.signal,
+							);
 			this.send({ type: "rpc-result", id: e.id, data });
 		} catch {
 			if (mutation) this.mutationUncertain = true;
@@ -489,12 +596,14 @@ export class Worker {
 				id: e.id,
 				error: mutation
 					? "Workspace mutation outcome unknown; do not replay"
-					: this.controller.signal.aborted
-						? "Worker cancelled"
-						: "Model request failed; check provider availability and credentials",
+					: observation
+						? "Workspace observation cleanup not confirmed"
+						: this.controller.signal.aborted
+							? "Worker cancelled"
+							: "Model request failed; check provider availability and credentials",
 			});
 		} finally {
-			this.rpcActive--;
+			if (!observation) this.rpcActive--;
 		}
 	}
 	private allowedRoutes(): string[] {
@@ -522,6 +631,10 @@ export class Worker {
 		if (this.workspaceMutationsEnabled) {
 			await this.activeMutation?.task.catch(() => {});
 			await stopWorkerWorkspaceMutation(this.name);
+		}
+		if (this.workspaceReadsEnabled) {
+			await this.observationTail;
+			await stopWorkerWorkspaceMutation(this.name, true);
 		}
 		const names = await command(dockerPath, [
 			"ps",

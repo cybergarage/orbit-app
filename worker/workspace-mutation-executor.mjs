@@ -1,6 +1,10 @@
 // The opt-in must fail closed with a stale Core or a WorkspaceExecutor
 // implementation that would route every managed built-in.
-export async function createWorkspaceMutationExecutor(rpc, capture) {
+export async function createWorkspaceMutationExecutor(
+	rpc,
+	capture,
+	options = { mutations: true },
+) {
 	if (!capture) {
 		const packageApi = await import(
 			"@cybergarage/orbit/dist/core/execution/workspace-executor.js"
@@ -11,16 +15,25 @@ export async function createWorkspaceMutationExecutor(rpc, capture) {
 		});
 		capture = packageApi.captureWorkspaceExecutor;
 	}
+	const names = Object.freeze([
+		...(options.mutations ? ["write", "edit"] : []),
+		...(options.reads ? ["read", "list", "glob", "grep"] : []),
+	]);
 	const requested = {
-		toolNames: Object.freeze(["write", "edit"]),
+		toolNames: names,
 		execute: (operation, signal) =>
-			rpc("workspace-mutation", operation, signal),
+			rpc(
+				operation.effect === "read" && options.reads
+					? "workspace-observation"
+					: "workspace-mutation",
+				operation,
+				signal,
+			),
 	};
 	const configured = capture?.(requested);
 	if (
-		configured?.toolNames?.length !== 2 ||
-		configured.toolNames[0] !== "write" ||
-		configured.toolNames[1] !== "edit"
+		configured?.toolNames?.length !== names.length ||
+		configured.toolNames.some((name, index) => name !== names[index])
 	)
 		throw new Error(
 			"Docker workspace mutations require Core selective workspace routing",

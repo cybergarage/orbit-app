@@ -5,6 +5,8 @@ const ownerLabel = "org.cybergarage.orbit-app.workspace-parent";
 const controlDeadline = 5_000;
 const executionDeadline = 15_000;
 const replyLimit = 16_384;
+const observationReplyLimit = 1024 * 1024;
+const observationDeadline = 12_000;
 const uncertain = () =>
 	new Error("Workspace mutation outcome unknown; do not replay");
 
@@ -26,19 +28,20 @@ export interface MutationPorts {
 	attached?: Attached;
 }
 
-function childName(parent: string): string {
+function childName(parent: string, observation = false): string {
 	const id = /^orbit-app-([a-f0-9-]{36})$/.exec(parent)?.[1];
 	if (!id) throw new Error("Invalid workspace mutation owner");
-	return `orbit-app-workspace-${id}`;
+	return `orbit-app-workspace-${id}${observation ? "-read" : ""}`;
 }
 
 /** An already durable parent ID determines the only child this run may reap. */
 export async function stopWorkspaceMutation(
 	parent: string,
 	ports: MutationPorts,
+	observation = false,
 ) {
 	const { docker, command } = ports;
-	const name = childName(parent);
+	const name = childName(parent, observation);
 	const find = () =>
 		command(
 			docker,
@@ -83,7 +86,14 @@ function acknowledged(value: unknown) {
 	};
 }
 
-const startAttached: Attached = (docker, id, message, signal) =>
+const startAttached = (
+	docker: string,
+	id: string,
+	message: string,
+	signal: AbortSignal,
+	deadline = executionDeadline,
+	maxBytes = replyLimit,
+): Promise<unknown> =>
 	new Promise((resolve, reject) => {
 		signal.throwIfAborted();
 		const child = spawn(docker, ["start", "--attach", "--interactive", id], {
@@ -95,7 +105,7 @@ const startAttached: Attached = (docker, id, message, signal) =>
 			child.kill("SIGKILL");
 			reject(uncertain());
 		};
-		const timer = setTimeout(abort, executionDeadline);
+		const timer = setTimeout(abort, deadline);
 		const cleanup = () => {
 			clearTimeout(timer);
 			signal.removeEventListener("abort", abort);
@@ -105,7 +115,7 @@ const startAttached: Attached = (docker, id, message, signal) =>
 		child.stdin.on("error", () => {});
 		child.stdout.on("data", (chunk: Buffer) => {
 			bytes += chunk.length;
-			if (bytes > replyLimit) abort();
+			if (bytes > maxBytes) abort();
 			else chunks.push(chunk);
 		});
 		child.once("error", abort);
@@ -154,5 +164,179 @@ export async function executeWorkspaceMutation(
 		return acknowledged(result);
 	} finally {
 		await stopWorkspaceMutation(parent, ports);
+	}
+}
+
+function observationError() {
+	return {
+		content: [
+			{
+				type: "text",
+				text: "Workspace observation failed or exceeded its limits",
+			},
+		],
+		isError: true,
+	};
+}
+
+function observationAcknowledged(value: unknown, tool: string) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const answer = value as Record<string, unknown>;
+	if (
+		Object.keys(answer).some(
+			(key) => !["content", "details", "isError"].includes(key),
+		) ||
+		!Array.isArray(answer.content) ||
+		answer.content.length !== 1 ||
+		(answer.isError !== undefined && answer.isError !== true) ||
+		Buffer.byteLength(JSON.stringify(answer)) > observationReplyLimit
+	)
+		return false;
+	const [part] = answer.content;
+	if (
+		part?.type !== "text" ||
+		typeof part.text !== "string" ||
+		Object.keys(part).some((key) => !["type", "text"].includes(key))
+	)
+		return false;
+	if (answer.isError === true) return answer.details === undefined;
+	if (
+		!answer.details ||
+		typeof answer.details !== "object" ||
+		Array.isArray(answer.details)
+	)
+		return false;
+	const detail = answer.details as Record<string, unknown>;
+	const nonnegative = (v: unknown) => Number.isSafeInteger(v) && Number(v) >= 0;
+	const outputPath = (v: unknown) =>
+		typeof v === "string" &&
+		(v === "/workspace" || v.startsWith("/workspace/")) &&
+		!v.split("/").includes("..");
+	const exact = (record: unknown, keys: string[]) =>
+		Boolean(
+			record &&
+				typeof record === "object" &&
+				!Array.isArray(record) &&
+				Object.keys(record).length === keys.length &&
+				Object.keys(record).every((key) => keys.includes(key)),
+		);
+	if (typeof detail.truncated !== "boolean") return false;
+	switch (tool) {
+		case "read":
+			return (
+				exact(detail, [
+					"encoding",
+					"path",
+					"startLine",
+					"endLine",
+					"totalLines",
+					"truncated",
+				]) &&
+				detail.encoding === "utf8" &&
+				outputPath(detail.path) &&
+				[detail.startLine, detail.endLine, detail.totalLines].every(nonnegative)
+			);
+		case "list":
+			return (
+				exact(detail, ["path", "entries", "omitted", "truncated"]) &&
+				outputPath(detail.path) &&
+				nonnegative(detail.omitted) &&
+				Array.isArray(detail.entries) &&
+				detail.entries.every(
+					(e) =>
+						exact(e, ["name", "kind"]) &&
+						typeof e.name === "string" &&
+						["directory", "file", "other", "symlink"].includes(e.kind),
+				)
+			);
+		case "glob":
+			return (
+				exact(detail, ["matches", "omitted", "truncated"]) &&
+				nonnegative(detail.omitted) &&
+				Array.isArray(detail.matches) &&
+				detail.matches.every(outputPath)
+			);
+		case "grep":
+			return (
+				exact(detail, ["matches", "truncated"]) &&
+				Array.isArray(detail.matches) &&
+				detail.matches.every(
+					(m) =>
+						exact(m, [
+							"line",
+							"column",
+							"path",
+							"text",
+							...(m?.context ? ["context"] : []),
+						]) &&
+						nonnegative(m.line) &&
+						nonnegative(m.column) &&
+						outputPath(m.path) &&
+						typeof m.text === "string" &&
+						(m.context === undefined ||
+							(Array.isArray(m.context) &&
+								m.context.every(
+									(c: any) =>
+										exact(c, ["line", "text"]) &&
+										nonnegative(c.line) &&
+										typeof c.text === "string",
+								))),
+				)
+			);
+		default:
+			return false;
+	}
+}
+
+export async function executeWorkspaceObservation(
+	parent: string,
+	workspace: string,
+	operation: Parameters<typeof encodeWorkspaceRequest>[1],
+	signal: AbortSignal,
+	ports: MutationPorts,
+) {
+	if (signal.aborted) return observationError();
+	let frame: string;
+	try {
+		if (
+			operation.effect !== "read" ||
+			!["read", "list", "glob", "grep"].includes(operation.name)
+		)
+			return observationError();
+		frame = encodeWorkspaceRequest("/workspace", operation);
+		if (Buffer.byteLength(frame) > 32 * 1024) return observationError();
+	} catch {
+		return observationError();
+	}
+	try {
+		const args = ports.args(childName(parent, true), workspace);
+		args[0] = "create";
+		args.splice(1, 0, "--label", `${ownerLabel}=${parent}`);
+		const id = (
+			await ports.command(ports.docker, args, controlDeadline)
+		).trim();
+		if (!/^[0-9a-f]{64}$/.test(id)) return observationError();
+		signal.throwIfAborted();
+		const start =
+			ports.attached ??
+			((docker, cid, message, abort) =>
+				startAttached(
+					docker,
+					cid,
+					message,
+					abort,
+					observationDeadline,
+					observationReplyLimit,
+				));
+		const value = await start(ports.docker, id, frame, signal);
+		return !signal.aborted && observationAcknowledged(value, operation.name)
+			? value
+			: observationError();
+	} catch {
+		// This lane cannot mutate. Once verified gone, a failed/expired reply is
+		// a settled tool error, not an unknown write nor a fallback.
+		return observationError();
+	} finally {
+		await stopWorkspaceMutation(parent, ports, true);
 	}
 }

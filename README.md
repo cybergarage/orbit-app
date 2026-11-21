@@ -126,3 +126,15 @@ creation or profile migration is in scope.
 The developer smoke check runs only generated files in a unique temporary
 workspace and builds/removes its own uniquely tagged image:
 `node --import tsx scripts/workspace-docker-smoke.ts`.
+
+
+To opt into isolated reading and search independently, rebuild the regular
+worker image and launch with `ORBIT_APP_DOCKER_WORKSPACE_READS=1 npm run dev`.
+Only `read`, `list`, `glob`, and `grep` use this lane; both flags may be
+enabled together. The one-shot reader has a nonrecursive read-only workspace
+bind and no state, credentials, or Docker socket. Link traversal and special
+files are refused. Each read request has its own bounded queue wait, 12-second
+attach deadline, 32 KiB request cap, and 1 MiB serialized reply cap (independent
+of the mutation acknowledgment cap). Traversal is capped at 12,000 directory
+entries, 8 MiB per file and 32 MiB scanned per operation. If a read limit is
+exceeded the tool reports a failure, not a partial success or a fallback.

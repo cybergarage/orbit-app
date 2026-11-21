@@ -27,3 +27,28 @@ test("the worker opts into only write/edit and forwards the active signal", asyn
 	assert.deepEqual(executor.toolNames, ["write", "edit"]);
 	assert.equal(await executor.execute(operation, signal), expected);
 });
+
+test("reader routes independently; combining it with mutations still excludes shell", async () => {
+	const capture = (value) => value;
+	for (const mutations of [false, true]) {
+		const calls = [];
+		const executor = await createWorkspaceMutationExecutor(
+			(route) => calls.push(route),
+			capture,
+			{ reads: true, mutations },
+		);
+		assert.deepEqual(executor.toolNames, [
+			...(mutations ? ["write", "edit"] : []),
+			"read",
+			"list",
+			"glob",
+			"grep",
+		]);
+		executor.execute({ name: "read", effect: "read" });
+		if (mutations) executor.execute({ name: "edit", effect: "write" });
+		assert.deepEqual(calls, [
+			"workspace-observation",
+			...(mutations ? ["workspace-mutation"] : []),
+		]);
+	}
+});

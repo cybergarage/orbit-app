@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome lint src test scripts worker --error-on-warnings",
     "test": "tsx --test --test-concurrency=1 test/*.test.ts worker/*.test.mjs",
+    "test:electron-sqlite": "node scripts/electron-sqlite-smoke.mjs",
     "test:ui": "npm run build && playwright test",
     "test:live": "tsx scripts/live.ts",
     "metadata:recover": "tsx scripts/recover-metadata.ts",

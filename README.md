@@ -52,6 +52,21 @@ open "release/Orbit App-darwin-arm64/Orbit App.app"
 
 The unsigned arm64 app still requires Docker, Ollama, and the locally built worker image. Docker and models are not bundled; signing and notarization are not included.
 
+### Verify Electron-host SQLite independently
+
+On a native macOS arm64 development machine with Xcode command-line tools,
+Node 26.10.0 and npm 11.19.1, run `npm run test:electron-sqlite` after
+installing the normal locked App dependencies. The proof builds the existing
+locked `better-sqlite3` source against the exact Electron 44.5.1 headers
+(checked by SHA-256), packages a separate GUI-less test app with the native
+module outside ASAR, then opens, writes, and reopens a synthetic Core Project
+catalog inside its real Electron main process. It expects Electron ABI 149.
+
+The proof downloads the pinned official headers; Electron Packager may also
+fetch the exact Electron binary on a cold cache. It does not replace the normal Node test addon, use a real
+profile, start Docker, or move the App catalog to the host. The regular App
+build and runtime are unchanged until the separate catalog integration.
+
 ## Prototype features and limits
 
 - Home/new-chat, project creation and editing with optional directory/instructions, session rename/move, conversation model selection, runtime health, operation approvals, cancellation, saved history, and top-level artifact listing.

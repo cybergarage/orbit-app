@@ -138,3 +138,24 @@ attach deadline, 32 KiB request cap, and 1 MiB serialized reply cap (independent
 of the mutation acknowledgment cap). Traversal is capped at 12,000 directory
 entries, 8 MiB per file and 32 MiB scanned per operation. If a read limit is
 exceeded the tool reports a failure, not a partial success or a fallback.
+
+
+### Fixed workspace command experiment (not connected to the App)
+
+`node --import tsx scripts/workspace-command-docker-smoke.ts` exercises a
+one-shot fixture image with a single read-only, nonrecursive workspace mount,
+network off, fixed subprocess arguments/environment, explicit deadline and
+bounded output. It accepts named operations only: a constant Bash probe,
+tracked Git index entries (without loading workspace Git config), Node syntax
+validation, and one local Node test file. Test files are executable code;
+use only trusted disposable fixtures in this experiment. No general shell,
+networked Git, dependency installation, linked worktrees, or production
+build execution is added. Git is installed when CI builds the disposable
+image from the existing pinned Debian-based Node image, not at runtime.
+
+The experiment reports a checked exit separately from refusal and unknown
+termination. It does not register a tool, change user settings, call a model,
+or enable a second execution path. Production Bash continues on its original
+route. Before activating the command executor, Core must bind the exact
+trusted execution profile to approval, preserve command-result provenance
+and define cancellation and output semantics without allowing backend fallback.

@@ -25,7 +25,10 @@ if (hostAgent) {
 	}
 }
 const profileOwned = app.requestSingleInstanceLock();
-if (!profileOwned) app.quit();
+if (!profileOwned) {
+	if (hostAgent) app.exit(0);
+	else app.quit();
+}
 const entry = path.join(__dirname, "index.html");
 async function openWindow() {
 	if (!supervisor || closing) return;
@@ -109,9 +112,13 @@ async function start() {
 			() => void supervisor.tick().catch(console.error),
 			15000,
 		);
-		void supervisor.dispatch("health").catch(() => {});
+		if (!(testMode && process.env.ORBIT_APP_NO_HEALTH_TEST === "1"))
+			void supervisor.dispatch("health").catch(() => {});
 	} catch (error) {
-		dialog.showErrorBox("Orbit App could not open its data", String(error));
+		if (hostAgent) await supervisor?.close().catch(console.error);
+		if (testMode) console.error(String(error));
+		else
+			dialog.showErrorBox("Orbit App could not open its data", String(error));
 		app.exit(1);
 	}
 }

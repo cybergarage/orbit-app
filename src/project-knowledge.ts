@@ -32,11 +32,13 @@ export const extractLocalKnowledge: KnowledgeExtractor = async (
 
 class RemoteProjectCatalog implements ProjectStore {
 	private metadata: CoreNames;
+	private ownsMetadata: boolean;
 	constructor(
 		private root: string,
 		metadata?: CoreNames,
 	) {
 		this.metadata = metadata ?? new ContainerCoreNames(root);
+		this.ownsMetadata = metadata === undefined;
 	}
 	async query<Q extends ProjectQuery>(
 		query: Q,
@@ -54,11 +56,11 @@ class RemoteProjectCatalog implements ProjectStore {
 		});
 	}
 	async close() {
-		await this.metadata.close?.();
+		if (this.ownsMetadata) await this.metadata.close?.();
 	}
 }
 
-/** Catalog is shared with metadata workers; source roots remain inside original worker mounts. */
+/** Use the catalog selected by the App lifecycle; lease source roots in their owning namespace. */
 export class ProjectKnowledge {
 	private catalog?: ProjectStore;
 	private core?: CoreKnowledge;

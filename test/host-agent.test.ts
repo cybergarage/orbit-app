@@ -89,7 +89,7 @@ test("isolated host-profile marker refuses unmarked, pre-existing directories", 
 		path.join(os.tmpdir(), "orbit-profile-fixture-"),
 	);
 	t.after(async () => fs.rm(base, { recursive: true, force: true }));
-	const target = path.join(base, "legacy-host-agent-v1");
+	const target = path.join(base, "legacy-host-agent-native-v2");
 	await fs.mkdir(target, { mode: 0o700 });
 	await fs.writeFile(path.join(target, "sentinel"), "keep");
 	assert.throws(
@@ -236,6 +236,7 @@ test("stale or missing Docker backend fails before any model or host file operat
 test("temporary catalog helper is shaped without a state or workspace mount", async (t) => {
 	const f = await fixture(t);
 	const catalog = path.join(f.root, "catalog");
+	await fs.mkdir(catalog, { recursive: true, mode: 0o700 });
 	const { runMetadataHelper } = await import("../src/metadata-helper");
 	let createCalls = 0;
 	const transport = {

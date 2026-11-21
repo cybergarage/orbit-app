@@ -159,13 +159,26 @@ export async function workerLaunchArgs(
 	return dockerArgs(name, workspace, core, admitted);
 }
 
-export function admitWorkspaceReaderImage() {
-	return admitDockerImage(
-		image,
-		workspaceReadsLabel,
-		"workspace reader",
-		command,
-	);
+export const standaloneWorkspaceReaderImage =
+	"docker.io/library/orbit-app-workspace-reader:local";
+
+export async function admitWorkspaceReaderImage(
+	run = command,
+	imageRef = standaloneWorkspaceReaderImage,
+) {
+	try {
+		return await admitDockerImage(
+			imageRef,
+			"org.cybergarage.orbit-app.workspace-reader-standalone",
+			"standalone workspace reader",
+			run,
+		);
+	} catch (cause) {
+		throw new Error(
+			"Host Agent requires the standalone Docker reader. Run npm run worker:reader:build.",
+			{ cause },
+		);
+	}
 }
 
 async function admitDockerImage(

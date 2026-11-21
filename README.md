@@ -106,7 +106,7 @@ arm64; verification on other platforms uses the checked-in bytes.
 On macOS arm64 with the native build tools above:
 
 ```sh
-npm run worker:build  # still supplies the read-only workspace runner
+npm run worker:reader:build
 npm run package:host-agent
 ORBIT_APP_HOST_AGENT=1 "release/host-agent/Orbit App-darwin-arm64/Orbit App.app/Contents/MacOS/Orbit App"
 ```
@@ -124,8 +124,9 @@ This slice supports chat and Docker-only `read`, `list`, `glob`, and `grep`.
 The admitted workspace reader has one read-only nonrecursive workspace bind
 and no network or state. Bash, file changes, project-native build/test,
 plugins, MCP, and data initialization remain unavailable in this mode.
-Interrupted runs are not replayed. The standalone reader and removal of
-the legacy default Agent are separate changes.
+The Host Agent uses the standalone image below and does not fall back to the
+legacy worker image or a host read. Interrupted runs are not replayed.
+Removal of the legacy default Agent is a separate change.
 
 Run `npm run test:host-catalog` for a disposable actual packaged App smoke:
 create a synthetic Project over normal App IPC, quit and relaunch with the
@@ -186,6 +187,21 @@ of the mutation acknowledgment cap). Traversal is capped at 12,000 directory
 entries, 8 MiB per file and 32 MiB scanned per operation. If a read limit is
 exceeded the tool reports a failure, not a partial success or a fallback.
 
+
+### Standalone Docker reader image for the Host Agent
+
+```sh
+npm run worker:reader:build
+node --import tsx scripts/workspace-reader-image-smoke.ts
+```
+
+This image packages only the existing bounded `read`, `list`, `glob`, and
+`grep` implementation and its lock-pinned search libraries. Its build context
+excludes the Orbit package, legacy Agent, metadata helpers, and session data.
+The image has no Orbit Core or application SQLite module. Only the opt-in
+Host Agent selects this image. Default and legacy tool routing are unchanged. CI verifies
+execution by immutable image ID with one nonrecursive, read-only workspace
+bind, no network, no state or catalog mount, and only disposable test files.
 
 ### Fixed workspace command experiment (not connected to the App)
 

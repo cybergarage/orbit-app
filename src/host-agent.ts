@@ -47,23 +47,29 @@ export interface HostReader {
 	): Promise<ToolResult>;
 	stop(parent: string): Promise<unknown>;
 }
-const dockerReader: HostReader = {
-	admit: admitWorkspaceReaderImage,
-	read: (parent, workspace, artifact, operation, signal) =>
-		executeWorkspaceObservation(
-			parent,
-			workspace,
-			operation,
-			signal,
-			{
-				docker: dockerPath,
-				command,
-				args: (name, root) => dockerWorkspaceArgs(name, root, artifact, true),
-			},
-			workspace,
-		),
-	stop: (parent) => stopWorkerWorkspaceMutation(parent, true),
-};
+export function createDockerHostReader(
+	imageRef?: string,
+	run: typeof command = command,
+): HostReader {
+	return {
+		admit: () => admitWorkspaceReaderImage(run, imageRef),
+		read: (parent, workspace, artifact, operation, signal) =>
+			executeWorkspaceObservation(
+				parent,
+				workspace,
+				operation,
+				signal,
+				{
+					docker: dockerPath,
+					command: run,
+					args: (name, root) => dockerWorkspaceArgs(name, root, artifact, true),
+				},
+				workspace,
+			),
+		stop: (parent) => stopWorkerWorkspaceMutation(parent, true),
+	};
+}
+const dockerReader = createDockerHostReader();
 
 interface HostRunConfig {
 	sessionId: string;

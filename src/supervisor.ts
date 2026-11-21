@@ -6,7 +6,11 @@ import {
 } from "./core-models";
 import type { KnowledgeExtractor } from "@cybergarage/orbit";
 import type { AcquireSources } from "./source-leases";
-import { HostAgentRun } from "./host-agent";
+import {
+	createDockerHostReader,
+	HostAgentRun,
+	type HostReader,
+} from "./host-agent";
 import { NativeProjectCatalog } from "./native-catalog";
 import { HostCoreNames, acquireHostSources } from "./host-core";
 import { ProjectKnowledge } from "./project-knowledge";
@@ -106,6 +110,7 @@ export class Supervisor {
 		} = {},
 		models?: ModelsHost,
 		private readonly hostAgent = false,
+		private readonly hostReader: HostReader = createDockerHostReader(),
 	) {
 		this.models = models ?? new CoreModelsHost(!this.hostAgent);
 		this.nativeCatalog = this.hostAgent
@@ -263,7 +268,8 @@ export class Supervisor {
 		try {
 			await command(dockerPath, ["info", "--format", "{{.ServerVersion}}"]);
 			health.docker = true;
-			await command(dockerPath, ["image", "inspect", image]);
+			if (this.hostAgent) await this.hostReader.admit();
+			else await command(dockerPath, ["image", "inspect", image]);
 			health.image = true;
 			if (this.hostAgent)
 				health.detail.push(
@@ -418,7 +424,9 @@ export class Supervisor {
 				(provider === "ollama" && !health.ollama)
 			)
 				throw new Error(
-					"Docker, worker image, and the selected provider must be available. Check status and build the worker image.",
+					this.hostAgent
+						? "Docker, the standalone Docker reader, and the selected provider must be available. Run npm run worker:reader:build."
+						: "Docker, worker image, and the selected provider must be available. Check status and build the worker image.",
 				);
 			await this.validateModel(
 				{ model, provider },
@@ -487,6 +495,7 @@ export class Supervisor {
 								body,
 								signal,
 							),
+						this.hostReader,
 					)
 				: this.factory(
 						workspace,

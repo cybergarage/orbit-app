@@ -140,6 +140,21 @@ entries, 8 MiB per file and 32 MiB scanned per operation. If a read limit is
 exceeded the tool reports a failure, not a partial success or a fallback.
 
 
+### Standalone Docker reader image (not selected by the App)
+
+```sh
+docker build -f worker/reader/Dockerfile -t orbit-app-workspace-reader:local worker
+node --import tsx scripts/workspace-reader-image-smoke.ts
+```
+
+This image packages only the existing bounded `read`, `list`, `glob`, and
+`grep` implementation and its lock-pinned search libraries. Its build context
+excludes the Orbit package, legacy Agent, metadata helpers, and session data.
+The image has no Orbit Core or application SQLite module. The App does not
+select it yet; existing Agent and tool routing have not changed. CI verifies
+execution by immutable image ID with one nonrecursive, read-only workspace
+bind, no network, no state or catalog mount, and only disposable test files.
+
 ### Fixed workspace command experiment (not connected to the App)
 
 `node --import tsx scripts/workspace-command-docker-smoke.ts` exercises a

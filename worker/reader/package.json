@@ -1,0 +1,9 @@
+{
+  "name": "orbit-app-workspace-reader",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "fast-glob": "3.3.3",
+    "ignore": "5.3.2"
+  }
+}

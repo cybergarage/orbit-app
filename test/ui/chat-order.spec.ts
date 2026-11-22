@@ -57,19 +57,30 @@ test("real Supervisor acceptance IPC reorders both groups before Worker completi
 			expect(before.indexOf(`${group} 1`)).toBeLessThan(
 				before.indexOf(`${group} 2`),
 			);
-			// Do not await submit: health is deliberately held before Worker creation.
-			await page.evaluate((label) => {
-				void window.orbit.call("snapshot").then((s) => {
-					const p = s.projects.find((p: { name: string }) => p.name === label);
-					void window.orbit.call("submit", {
-						projectId: p.id,
-						sessionId: p.sessions[1].id,
-						prompt: "Fixture task",
-						model: "fixture",
-						requestId: crypto.randomUUID(),
-					});
-				});
-			}, group);
+			// Retain the IPC result without awaiting it while health is held.
+			const submission = await page.evaluateHandle(
+				(label) => ({
+					outcome: window.orbit
+						.call("snapshot")
+						.then((s) => {
+							const p = s.projects.find(
+								(p: { name: string }) => p.name === label,
+							);
+							return window.orbit.call("submit", {
+								projectId: p.id,
+								sessionId: p.sessions[1].id,
+								prompt: "Fixture task",
+								model: "fixture",
+								requestId: crypto.randomUUID(),
+							});
+						})
+						.then(
+							(result) => ({ result }),
+							(error) => ({ error: String(error) }),
+						),
+				}),
+				group,
+			);
 			await expect
 				.poll(async () =>
 					(await rows().allTextContents()).indexOf(`${group} 2`),
@@ -84,19 +95,27 @@ test("real Supervisor acceptance IPC reorders both groups before Worker completi
 				)
 				.toBe(true);
 			await app.evaluate(() => (globalThis as any).orderControl.release());
+			expect(await submission.evaluate(({ outcome }) => outcome)).toEqual({
+				result: { accepted: true },
+			});
+			await submission.dispose();
 			await expect
 				.poll(() =>
 					app.evaluate(() => (globalThis as any).orderControl.starts()),
 				)
 				.toBe(group === "Project" ? 1 : 2);
 			await app.evaluate(() => (globalThis as any).orderControl.finish());
+			// An inactive snapshot precedes the final save and admission release.
 			await expect
-				.poll(async () =>
-					page.evaluate(
-						async () => !!(await window.orbit.call("snapshot")).active,
-					),
+				.poll(() =>
+					app.evaluate(() => (globalThis as any).orderControl.hasWorker()),
 				)
 				.toBe(false);
+			expect(
+				await page.evaluate(
+					async () => (await window.orbit.call("snapshot")).active,
+				),
+			).toBeUndefined();
 			await expect(rows()).toHaveText(
 				group === "Project"
 					? ["Project 2", "Project 1", "Chats 1", "Chats 2"]

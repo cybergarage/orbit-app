@@ -439,7 +439,9 @@ export class Supervisor {
 			)
 				throw new Error(
 					this.hostAgent
-						? "Docker, the standalone workspace images for this mode, and the selected provider must be available. Check Settings for details."
+						? this.hostWriter
+							? "Docker, the standalone Docker reader and writer, and the selected provider must be available. Check Settings for details."
+							: "Docker, the standalone Docker reader, and the selected provider must be available. Run npm run worker:reader:build."
 						: "Docker, worker image, and the selected provider must be available. Check status and build the worker image.",
 				);
 			await this.validateModel(

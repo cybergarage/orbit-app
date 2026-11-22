@@ -10,6 +10,7 @@ import {
 	createDockerHostReader,
 	HostAgentRun,
 	type HostReader,
+	type HostWriter,
 } from "./host-agent";
 import { NativeProjectCatalog } from "./native-catalog";
 import { HostCoreNames, acquireHostSources } from "./host-core";
@@ -111,6 +112,7 @@ export class Supervisor {
 		models?: ModelsHost,
 		private readonly hostAgent = false,
 		private readonly hostReader: HostReader = createDockerHostReader(),
+		private readonly hostWriter?: HostWriter,
 	) {
 		this.models = models ?? new CoreModelsHost(!this.hostAgent);
 		this.nativeCatalog = this.hostAgent
@@ -173,7 +175,10 @@ export class Supervisor {
 		}
 		await this.nativeCatalog?.prepare();
 		await this.store.init();
-		if (this.hostAgent) this.store.state.executionBackend = "host-readonly";
+		if (this.hostAgent)
+			this.store.state.executionBackend = this.hostWriter
+				? "host-files"
+				: "host-readonly";
 		else delete this.store.state.executionBackend;
 		await this.reconcile();
 		await this.knowledge.init();
@@ -194,6 +199,11 @@ export class Supervisor {
 			if (a.runtime === "host-v1") {
 				if (!this.hostAgent || a.containerName)
 					throw new Error("Saved host run belongs to another profile mode");
+				if (a.workspaceMutations === true) {
+					if (!a.readerOwner)
+						throw new Error("Saved Host Agent writer identity is missing");
+					await stopWorkerWorkspaceMutation(a.readerOwner);
+				}
 				if (a.readerOwner)
 					await stopWorkerWorkspaceMutation(a.readerOwner, true);
 			} else {
@@ -268,12 +278,16 @@ export class Supervisor {
 		try {
 			await command(dockerPath, ["info", "--format", "{{.ServerVersion}}"]);
 			health.docker = true;
-			if (this.hostAgent) await this.hostReader.admit();
-			else await command(dockerPath, ["image", "inspect", image]);
+			if (this.hostAgent) {
+				await this.hostReader.admit();
+				await this.hostWriter?.admit();
+			} else await command(dockerPath, ["image", "inspect", image]);
 			health.image = true;
 			if (this.hostAgent)
 				health.detail.push(
-					"Host Agent development profile: Docker read/search only; shell and file changes are disabled.",
+					this.hostWriter
+						? "Host Agent development profile: Docker read/search and approved file changes; shell is disabled."
+						: "Host Agent development profile: Docker read/search only; shell and file changes are disabled.",
 				);
 		} catch (e) {
 			health.detail.push(String(e));
@@ -425,7 +439,9 @@ export class Supervisor {
 			)
 				throw new Error(
 					this.hostAgent
-						? "Docker, the standalone Docker reader, and the selected provider must be available. Run npm run worker:reader:build."
+						? this.hostWriter
+							? "Docker, the standalone Docker reader and writer, and the selected provider must be available. Check Settings for details."
+							: "Docker, the standalone Docker reader, and the selected provider must be available. Run npm run worker:reader:build."
 						: "Docker, worker image, and the selected provider must be available. Check status and build the worker image.",
 				);
 			await this.validateModel(
@@ -496,6 +512,7 @@ export class Supervisor {
 								signal,
 							),
 						this.hostReader,
+						this.hostWriter,
 					)
 				: this.factory(
 						workspace,
@@ -513,6 +530,8 @@ export class Supervisor {
 			if (this.store.state.active) {
 				if (this.hostAgent) {
 					this.store.state.active.readerOwner = worker.name;
+					if (worker.workspaceMutationsEnabled)
+						this.store.state.active.workspaceMutations = true;
 				} else {
 					this.store.state.active.containerName = worker.name;
 					if (worker.workspaceMutationsEnabled)
@@ -961,9 +980,9 @@ export class Supervisor {
 				return this.cancel();
 			case "approve": {
 				if (!this.worker) throw new Error("No active worker");
-				this.worker.approve(p.id, p.approve);
 				const active = this.store.state.active;
-				if (active) {
+				await this.worker.approve(p.id, p.approve);
+				if (active && this.store.state.active === active) {
 					const event = {
 						id: randomUUID(),
 						type: "approval-decision",

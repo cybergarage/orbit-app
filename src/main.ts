@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Supervisor } from "./supervisor";
 import { openHostAgentProfile } from "./host-profile";
+import { createDockerHostWriter } from "./host-agent";
 let window: BrowserWindow;
 let supervisor: Supervisor;
 let closing = false;
@@ -84,6 +85,10 @@ async function start() {
 				: undefined,
 			undefined,
 			hostAgent,
+			undefined,
+			hostAgent && process.env.ORBIT_APP_HOST_AGENT_FILE_CHANGES === "1"
+				? createDockerHostWriter()
+				: undefined,
 		);
 		await supervisor.init();
 		nativeTheme.themeSource = supervisor.store.state.appearance ?? "system";

@@ -53,6 +53,8 @@ jobs:
         run: node --import tsx scripts/workspace-app-docker-smoke.ts
       - name: Verify the isolated Host Agent with the standalone Docker reader
         run: node --import tsx scripts/host-agent-docker-smoke.ts
+      - name: Verify approved host-only file changes and standalone Docker cleanup
+        run: ORBIT_APP_TEST_HOST_WRITER_DOCKER=1 node --import tsx --test --test-name-pattern="Docker Host writer" test/host-agent.test.ts
       - name: Verify the experimental fixed workspace command contract
         run: node --import tsx scripts/workspace-command-docker-smoke.ts
       # Host-wide lsof inspection must not race other fixture Docker mounts.

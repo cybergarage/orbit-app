@@ -62,7 +62,7 @@ export async function stopWorkspaceMutation(
 		throw new Error("Workspace mutation stop not confirmed");
 }
 
-function acknowledged(value: unknown) {
+function acknowledged(value: unknown): ToolResult {
 	if (!value || typeof value !== "object" || Array.isArray(value))
 		throw uncertain();
 	const result = value as Record<string, unknown>;
@@ -141,11 +141,12 @@ export async function executeWorkspaceMutation(
 	operation: Parameters<typeof encodeWorkspaceRequest>[1],
 	signal: AbortSignal,
 	ports: MutationPorts,
+	sourceRoot = "/workspace",
 ) {
 	signal.throwIfAborted();
 	if (operation.name !== "write" && operation.name !== "edit")
 		throw new Error("Only prepared writes and edits may use this route");
-	const frame = encodeWorkspaceRequest("/workspace", operation);
+	const frame = encodeWorkspaceRequest(sourceRoot, operation);
 	const args = ports.args(childName(parent), workspace);
 	args[0] = "create";
 	args.splice(args.length - 1, 0, "--label", `${ownerLabel}=${parent}`);

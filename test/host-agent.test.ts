@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { HostAgentRun, type HostReader } from "../src/host-agent";
+import {
+	createDockerHostWriter,
+	HostAgentRun,
+	type HostReader,
+	type HostWriter,
+} from "../src/host-agent";
+import { command, dockerPath } from "../src/worker";
 import {
 	HostCoreNames,
 	hostRepository,
@@ -275,4 +281,334 @@ test("temporary catalog helper is shaped without a state or workspace mount", as
 		/cannot access sessions/,
 	);
 	assert.equal(createCalls, 1);
+});
+
+// Local synthetic files only. Optional Docker tests use a unique tag and
+// only the fixture's selected workspace, never a real profile or model.
+const writerImage = `sha256:${"d".repeat(64)}`;
+const fixtureReader: HostReader = {
+	admit: async () => `sha256:${"c".repeat(64)}`,
+	read: async () => assert.fail("No reader dispatch was requested"),
+	stop: async () => {},
+};
+
+function mutationRun(
+	f: Awaited<ReturnType<typeof fixture>>,
+	writer: HostWriter,
+	operations: ReadonlyArray<readonly [string, unknown]>,
+	decide: (run: HostAgentRun, id: string, i: number) => Promise<void>,
+) {
+	let modelCalls = 0;
+	let approvals = 0;
+	const results: Array<{
+		outcome: string;
+		operations: Array<{ status: string }>;
+	}> = [];
+	const replies: Promise<void>[] = [];
+	const run = new HostAgentRun(
+		f.workspace,
+		f.core,
+		{
+			sessionId: f.sessionId,
+			requestId: randomUUID(),
+			model: "gpt-4o",
+			provider: "openai",
+			prompt: "Synthetic Host Agent file-change test.",
+		},
+		(event) => {
+			if (event.type === "approval") {
+				const request = event.data as {
+					id: string;
+					sessionId: string;
+					responderScope: string;
+					digest: string;
+				};
+				assert.equal(request.sessionId, f.sessionId);
+				assert.equal(request.responderScope, "desktop-owner");
+				assert.ok(request.digest);
+				const reply = Promise.resolve().then(() =>
+					decide(run, request.id, ++approvals),
+				);
+				void reply.catch(() => run.stop().catch(() => {}));
+				replies.push(reply);
+			} else if (event.type === "result") {
+				results.push(
+					(event.data as { runtime: (typeof results)[number] }).runtime,
+				);
+			}
+		},
+		async (_route, body, signal) => {
+			signal.throwIfAborted();
+			const { tools } = body as {
+				tools: Array<{ function: { name: string } }>;
+			};
+			assert.deepEqual(tools.map((tool) => tool.function.name).sort(), [
+				"edit",
+				"glob",
+				"grep",
+				"list",
+				"read",
+				"write",
+			]);
+			const step = operations[modelCalls++];
+			return step ? completion(...step) : completion();
+		},
+		fixtureReader,
+		writer,
+	);
+	return { run, results, replies };
+}
+
+test("host writer uses exact prepared digests, denies without dispatch, and rejects stale replies", async (t) => {
+	const f = await fixture(t);
+	const note = path.join(f.workspace, "note.txt");
+	await fs.writeFile(note, "before");
+	const frames: Array<ReturnType<typeof JSON.parse>> = [];
+	const reaped: string[] = [];
+	const { run, results, replies } = mutationRun(
+		f,
+		{
+			admit: async () => writerImage,
+			async mutate(_parent, workspace, image, op) {
+				assert.equal(workspace, f.workspace);
+				assert.equal(image, writerImage);
+				assert.equal(op.target, note);
+				frames.push(JSON.parse(encodeWorkspaceRequest(workspace, op)));
+				return {
+					content: [{ type: "text", text: "synthetic acknowledgment" }],
+				};
+			},
+			async stop(owner) {
+				reaped.push(owner);
+			},
+		},
+		[
+			["write", { path: "denied.txt", content: "do not write" }],
+			["edit", { path: "note.txt", oldText: "before", newText: "after" }],
+		],
+		async (r, id, i) => {
+			await assert.rejects(r.approve(randomUUID(), true), /no longer pending/);
+			assert.equal(await fs.readFile(note, "utf8"), "before");
+			await r.approve(id, i === 2);
+			await assert.rejects(r.approve(id, true), /no longer pending/);
+		},
+	);
+	await run.start();
+	await Promise.all(replies);
+	await run.confirmGone();
+	assert.equal(frames.length, 1);
+	assert.equal(frames[0].name, "edit");
+	assert.equal(frames[0].cwd, "/workspace");
+	assert.equal(frames[0].target, "/workspace/note.txt");
+	assert.equal(frames[0].input.path, "/workspace/note.txt");
+	assert.equal(
+		frames[0].preimageSha256,
+		createHash("sha256").update("before").digest("hex"),
+	);
+	assert.equal(
+		frames[0].resultSha256,
+		createHash("sha256").update("after").digest("hex"),
+	);
+	assert.equal(
+		await fs.readFile(note, "utf8"),
+		"before",
+		"No local executor fallback",
+	);
+	await assert.rejects(fs.stat(path.join(f.workspace, "denied.txt")), {
+		code: "ENOENT",
+	});
+	assert.deepEqual(reaped, [run.name]);
+	assert.deepEqual(
+		results[0]?.operations.map((op) => op.status),
+		["denied", "succeeded"],
+	);
+});
+
+test("cancelled approval cannot open the workspace writer", async (t) => {
+	const f = await fixture(t);
+	const { run, replies } = mutationRun(
+		f,
+		{
+			admit: async () => writerImage,
+			mutate: async () => assert.fail("A cancelled approval cannot dispatch"),
+			stop: async () => {},
+		},
+		[["write", { path: "cancelled.txt", content: "not written" }]],
+		async (r, id) => {
+			void r.stop().catch(() => {});
+			await assert.rejects(r.approve(id, true), /no longer pending/);
+		},
+	);
+	await run.start();
+	await Promise.all(replies);
+	await run.confirmGone();
+	await assert.rejects(fs.stat(path.join(f.workspace, "cancelled.txt")), {
+		code: "ENOENT",
+	});
+});
+
+test("lost writer acknowledgment remains unknown with no second dispatch or host fallback", async (t) => {
+	const f = await fixture(t);
+	let dispatches = 0;
+	const { run, results, replies } = mutationRun(
+		f,
+		{
+			admit: async () => writerImage,
+			async mutate() {
+				dispatches++;
+				throw new Error("Fixture lost its acknowledgment");
+			},
+			stop: async () => {},
+		},
+		[["write", { path: "uncertain.txt", content: "not written locally" }]],
+		async (r, id) => {
+			await r.approve(id, true);
+		},
+	);
+	await run.start().catch(() => {}); // Core can retain the guard for an uncertain writer.
+	await Promise.all(replies);
+	assert.equal(dispatches, 1);
+	assert.equal(results[0]?.outcome, "incomplete");
+	assert.equal(results[0]?.operations[0]?.status, "unknown");
+	await assert.rejects(run.confirmGone(), /ownership remains/);
+	await assert.rejects(fs.stat(path.join(f.workspace, "uncertain.txt")), {
+		code: "ENOENT",
+	});
+});
+
+test("host writer rejects stale image admission before provider dispatch", async (t) => {
+	const f = await fixture(t);
+	const writer = createDockerHostWriter(
+		"fixture-writer",
+		async (_exe, args) => {
+			assert.match(
+				args.join(" "),
+				/org\.cybergarage\.orbit-app\.workspace-runner/,
+			);
+			return `${writerImage} <no value>`;
+		},
+	);
+	const { run, replies } = mutationRun(f, writer, [], async () => {
+		assert.fail("A stale writer cannot request approval");
+	});
+	await assert.rejects(run.start(), /standalone Docker writer/);
+	await run.confirmGone();
+	assert.deepEqual(replies, []);
+});
+
+test("Docker Host writer executes only approved changes and reaps owned containers", {
+	skip: process.env.ORBIT_APP_TEST_HOST_WRITER_DOCKER !== "1",
+	timeout: 120_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const tag = `orbit-app-host-writer-fixture:${randomUUID()}`;
+	t.after(async () =>
+		command(dockerPath, ["image", "rm", tag]).catch(() => {}),
+	);
+	await command(
+		dockerPath,
+		["build", "--network=none", "--tag", tag, "worker/workspace"],
+		90_000,
+	);
+	const writer = createDockerHostWriter(tag);
+	const artifact = await writer.admit();
+	let containers = 0;
+	let cancelOnCreate: (() => void) | undefined;
+	const inspected = createDockerHostWriter(tag, async (exe, args, timeout) => {
+		const result = await command(exe, args, timeout);
+		if (args[0] !== "create") return result;
+		const [created] = JSON.parse(
+			await command(exe, ["inspect", result.trim()], 5_000),
+		);
+		assert.equal(created.Image, artifact);
+		assert.equal(created.HostConfig.NetworkMode, "none");
+		assert.equal(created.HostConfig.ReadonlyRootfs, true);
+		assert.deepEqual(
+			created.Mounts.map(
+				(entry: { Type: string; Destination: string; RW: boolean }) => [
+					entry.Type,
+					entry.Destination,
+					entry.RW,
+				],
+			),
+			[["bind", "/workspace", true]],
+		);
+		assert.ok(
+			args.includes(
+				`type=bind,src=${f.workspace},dst=/workspace,bind-recursive=disabled`,
+			),
+		);
+		assert.equal(args.filter((arg) => arg === "--mount").length, 1);
+		assert.ok(!args.includes("--env-file"));
+		assert.ok(created.Config.Env.includes("HTTP_PROXY="));
+		assert.ok(created.Config.Env.includes("https_proxy="));
+		assert.ok(
+			created.Config.Env.filter((value: string) =>
+				/^\w*_proxy=/i.test(value),
+			).every((value: string) => value.endsWith("=")),
+		);
+		containers++;
+		cancelOnCreate?.();
+		return result;
+	});
+	const assertGone = async (name: string) => {
+		const remaining = await command(dockerPath, [
+			"ps",
+			"-a",
+			"--filter",
+			`label=org.cybergarage.orbit-app.workspace-parent=${name}`,
+			"--format",
+			"{{.Names}}",
+		]);
+		assert.equal(remaining.trim(), "");
+	};
+	const first = mutationRun(
+		f,
+		inspected,
+		[
+			["write", { path: "note.txt", content: "before" }],
+			["write", { path: "denied.txt", content: "denied" }],
+			["edit", { path: "note.txt", oldText: "before", newText: "after" }],
+			[
+				"write",
+				{
+					path: "missing/file.txt",
+					content: "no directory changes",
+					createDirectories: true,
+				},
+			],
+		],
+		(run, id, i) => run.approve(id, i !== 2),
+	);
+	t.after(() => writer.stop(first.run.name));
+	await first.run.start();
+	await Promise.all(first.replies);
+	await first.run.confirmGone();
+	assert.deepEqual(
+		first.results[0]?.operations.map((op) => op.status),
+		["succeeded", "denied", "succeeded", "failed"],
+	);
+	assert.equal(
+		await fs.readFile(path.join(f.workspace, "note.txt"), "utf8"),
+		"after",
+	);
+	assert.deepEqual(await fs.readdir(f.workspace), ["note.txt"]);
+	assert.equal(containers, 3);
+	await assertGone(first.run.name);
+
+	const second = mutationRun(
+		f,
+		inspected,
+		[["write", { path: "cancelled.txt", content: "do not start" }]],
+		(run, id) => run.approve(id, true),
+	);
+	t.after(() => writer.stop(second.run.name));
+	cancelOnCreate = () => {
+		void second.run.stop().catch(() => {});
+	};
+	await second.run.start().catch(() => {});
+	await Promise.all(second.replies);
+	assert.equal(containers, 4);
+	await assertGone(second.run.name);
+	assert.deepEqual(await fs.readdir(f.workspace), ["note.txt"]);
 });

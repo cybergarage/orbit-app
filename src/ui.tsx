@@ -210,7 +210,11 @@ function App() {
 	const [state, setState] = useState<Snapshot>({ projects: [], schedules: [] });
 	const [view, setView] = useState("home");
 	const [debug, setDebug] = useState(false);
-	const hostAgentPreview = state.executionBackend === "host-readonly";
+	const hostAgentPreview = state.executionBackend !== undefined;
+	const hostAgentMessage =
+		state.executionBackend === "host-files"
+			? "Host Agent preview: Docker read/search and approved file changes; no shell."
+			: "Host Agent preview: only Docker read/search tools are available.";
 	const [savingName, setSavingName] = useState(false);
 	const [projectId, setProject] = useState("");
 	const [sessionId, setSession] = useState("");
@@ -808,7 +812,7 @@ function App() {
 							</div>
 							<small className="conversation-footer">
 								{hostAgentPreview
-									? "Host Agent preview: only Docker read/search tools are available."
+									? hostAgentMessage
 									: "Workspaces persist; active tasks stop when the app exits."}
 							</small>
 						</>
@@ -823,7 +827,7 @@ function App() {
 							{composer}
 							<small>
 								{hostAgentPreview
-									? "Host Agent preview: only Docker read/search tools are available."
+									? hostAgentMessage
 									: "Tasks run locally in an isolated worker. Review writes and commands before they execute."}
 							</small>
 						</div>

@@ -122,11 +122,21 @@ App package, profile and Docker-backed default route are unchanged.
 
 This slice supports chat and Docker-only `read`, `list`, `glob`, and `grep`.
 The admitted workspace reader has one read-only nonrecursive workspace bind
-and no network or state. Bash, file changes, project-native build/test,
-plugins, MCP, and data initialization remain unavailable in this mode.
+and no network or state. Bash, project-native build/test, plugins, MCP, and
+data initialization remain unavailable in this mode.
 The Host Agent uses the standalone image below and does not fall back to the
 legacy worker image or a host read. Interrupted runs are not replayed.
 Removal of the legacy default Agent is a separate change.
+
+File changes are separately opt-in: build `npm run worker:workspace:build`
+and launch the same Host Agent with `ORBIT_APP_HOST_AGENT_FILE_CHANGES=1`
+in addition to `ORBIT_APP_HOST_AGENT=1`. Only `write` and exact-text `edit`
+are added. File changes require existing parent directories. Multi-file
+patches, shell, and Git are not exposed. Each file
+change needs explicit approval of the Core-prepared operation. A one-shot
+Docker executor mounts only the selected workspace (writable, without nested
+mounts); the image contains neither Orbit nor SQLite. A missing image stops
+admission; uncertain effects are not replayed or sent to another backend.
 
 Run `npm run test:host-catalog` for a disposable actual packaged App smoke:
 create a synthetic Project over normal App IPC, quit and relaunch with the

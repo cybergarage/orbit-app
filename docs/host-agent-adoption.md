@@ -1,9 +1,11 @@
 # Host Agent and legacy profile adoption
 
-The current Host Agent flag selects a **separate** marked profile. Switching it
-off opens the legacy profile again; switching it on never imports legacy chats,
-Project memory, or workspace files. This is reversible profile selection, not
-a migration. The legacy profile can still relocate a supported root
+The native package defaults to a **separate** marked Host profile for fresh
+launches and resumes its valid Host sibling when present. Existing nonempty
+legacy profiles without a Host sibling remain legacy. Explicitly setting
+`ORBIT_APP_HOST_AGENT=0` opens the legacy profile; `=1` selects Host. Neither
+selection imports legacy chats, Project memory, or workspace files. This is
+reversible profile selection, not a migration. The legacy profile can still relocate a supported root
 `state.json` to `registry/state.json` by rename. Unsupported legacy name
 formats remain refused.
 

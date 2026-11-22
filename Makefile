@@ -12,8 +12,9 @@ run:
 	git switch main; \
 	git pull --ff-only; \
 	npm ci; \
-	npm run worker:build; \
-	npm run dev
+	npm run worker:reader:build; \
+	npm run package; \
+	"release/Orbit App-darwin-arm64/Orbit App.app/Contents/MacOS/Orbit App"
 
 clean:
 	@set -eu; \

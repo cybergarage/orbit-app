@@ -5,7 +5,10 @@
 
 Developer desktop workspace powered by [Orbit](https://github.com/cybergarage/orbit).
 
-A local Electron desktop prototype for local agent work. Create a project and session, send a task to native Ollama, and review writes or commands before Orbit executes them in a network-disabled container. No cloud model fallback.
+A local Electron desktop prototype for agent work. On a fresh native package,
+Electron owns the Agent and sends workspace reads to network-disabled Docker
+execution. File changes require a separate opt-in and per-operation approval.
+The app never switches model providers as a fallback.
 
 ## Desktop preview
 
@@ -31,11 +34,16 @@ cd ~/Src/orbit-app
 # The audited local Core tarball is included; no unpublished registry version
 # or machine-specific source checkout is needed for installation.
 npm ci
-npm run worker:build
-npm run dev
+npm run worker:reader:build
+npm run package
+open "release/Orbit App-darwin-arm64/Orbit App.app"
 ```
 
-Create a project and session, select a model, and submit a task. Review each requested write or command, then inspect its progress, results, and workspace files. Projects use an app-managed workspace or an optional existing local directory. Conversations save their model choice and persisted Orbit history.
+The native package opens the Host Agent by default for a fresh profile, with
+Docker-only read and search tools. Create a project and chat, select a model,
+and submit a task. Approved file changes are a separate opt-in below. Projects
+use an app-managed workspace or a supported existing directory, and chats
+retain their model choice and Orbit history.
 
 Project knowledge is automatically extracted after successful conversations and
 reused in related conversations in the same logical Project. No manual saving or
@@ -50,7 +58,11 @@ npm run package
 open "release/Orbit App-darwin-arm64/Orbit App.app"
 ```
 
-The unsigned arm64 app still requires Docker, Ollama, and the locally built worker image. Docker and models are not bundled; signing and notarization are not included.
+The normal unsigned macOS arm64 package builds the lock-pinned SQLite addon
+for Electron using the native toolchain below. Docker and the locally built
+reader image are still required; Docker images, models, signing and
+notarization are not bundled. `npm run dev` and `npm run package:legacy` keep
+the legacy build pathway available for source/developer checks.
 
 ### Verify Electron-host SQLite independently
 
@@ -63,9 +75,10 @@ module outside ASAR, then opens, writes, and reopens a synthetic Core Project
 catalog inside its real Electron main process. It expects Electron ABI 149.
 
 The proof downloads the pinned official headers; Electron Packager may also
-fetch the exact Electron binary on a cold cache. It does not replace the normal Node test addon, use a real
-profile, start Docker, or move the App catalog to the host. The regular App
-build and runtime are unchanged until the separate catalog integration.
+fetch the exact Electron binary on a cold cache. The standalone SQLite probe
+does not replace the normal Node test addon, use a real profile, start Docker,
+or touch an App catalog. The native App package uses the same pinned build
+path for its own Electron addon.
 
 ## Prototype features and limits
 
@@ -76,7 +89,7 @@ build and runtime are unchanged until the separate catalog integration.
 - One-time, fixed-interval and calendar schedules with a saved IANA time zone. Relative first runs start from successful creation; fixed intervals keep their planned anchor, while daily/weekly rules keep local wall time. **The app must be running.** Missed occurrences coalesce; interrupted work is not automatically replayed. There is no background daemon.
 - Scheduled tasks have explicit Enable/Disable and confirmed Delete controls. Enabling retains a future slot or skips elapsed recurring slots while preserving the original interval/calendar anchor and time zone; past or already-admitted one-time slots require editing to a new future time. Editing a disabled task keeps it disabled. Disable/Delete prevent future admission and never cancel an already-admitted run. Delete removes only the definition: execution history, chats and working files remain. Changes persist across restart.
 - First-input Chat titles are saved through core before Worker admission. A bounded local model call may refine the title after the task settles; manual names take priority.
-- Intended for trusted local workspaces. Workers have no network access and receive only their project's workspace/core mounts, without host credentials or the Docker socket. This is not a complete sandbox guarantee: approved Bash can modify the project's core records.
+- Intended for trusted local workspaces. Host-mode Docker executors receive only the selected workspace mount and no network, host credentials, or Docker socket. The legacy Agent still has workspace and Core mounts; its separately approved Bash is not a complete sandbox guarantee.
 - Per-file limits and a storage watchdog are **not a hard disk quota**; rapid writes can still consume host disk space.
 - Orbit's pinned `braces@3.0.3` dependency has an unpatched DoS advisory. Restricted search syntax mitigates the direct glob/grep path, but an approved Bash script can still invoke the vulnerable dependency.
 
@@ -101,24 +114,30 @@ host and worker locks and the CI source checkout use that same artifact/pin.
 This artifact was reproduced with Node 26.10.0 and npm 11.19.1 on macOS
 arm64; verification on other platforms uses the checked-in bytes.
 
-### Host Agent development profile
+### Host Agent profile selection
 
-On macOS arm64 with the native build tools above:
+With no override, the native package opens an existing valid Host profile or
+creates a marked `-host-agent-native-v2` sibling when the legacy root is missing
+or empty. A nonempty legacy root without a Host sibling stays on the existing
+legacy route. If both profiles exist, the native package resumes Host; explicitly
+use `ORBIT_APP_HOST_AGENT=0` to open the independent legacy profile. A malformed
+Host profile refuses startup rather than silently opening a different history.
+No chat, Project memory, or files are adopted or copied.
+
+From the checkout, the legacy escape and explicit Host selection are:
 
 ```sh
-npm run worker:reader:build
-npm run package:host-agent
-ORBIT_APP_HOST_AGENT=1 "release/host-agent/Orbit App-darwin-arm64/Orbit App.app/Contents/MacOS/Orbit App"
+npm run worker:build   # required by the legacy route
+APP="release/Orbit App-darwin-arm64/Orbit App.app/Contents/MacOS/Orbit App"
+ORBIT_APP_HOST_AGENT=0 "$APP"   # open only the legacy profile
+ORBIT_APP_HOST_AGENT=1 "$APP"   # open only the separate Host profile
 ```
 
-The opt-in selects a new, marked `-host-agent-native-v2` sibling profile.
-It does not open, migrate, or reuse the older Docker-backed preview or default
-profile. Electron owns the Agent, model transport, session/journal state,
-Project source leases, and one SQLite catalog shared by Project operations
-and Project Knowledge. The App drains the catalog before releasing its
-profile lock. Missing or invalid native SQLite and retained helper recovery
-markers refuse startup; there is no SQLite container fallback. The normal
-App package, profile and Docker-backed default route are unchanged.
+Electron owns the Host Agent, model transport, session/journal state, Project
+source leases, and its SQLite catalog. Missing/invalid native SQLite refuses
+startup; missing Docker reader refuses task admission. Neither failure reopens
+legacy. Run `npm run test:host-default` on macOS arm64 for a disposable packaged
+proof of default selection, no fallback, and explicit reversion.
 
 See [Host Agent and legacy profile adoption](docs/host-agent-adoption.md)
 for the verified switch-back behavior and the prerequisites for any future
@@ -133,8 +152,9 @@ legacy worker image or a host read. Interrupted runs are not replayed.
 Removal of the legacy default Agent is a separate change.
 
 File changes are separately opt-in: build `npm run worker:workspace:build`
-and launch the same Host Agent with `ORBIT_APP_HOST_AGENT_FILE_CHANGES=1`
-in addition to `ORBIT_APP_HOST_AGENT=1`. Only `write` and exact-text `edit`
+and launch the Host Agent with `ORBIT_APP_HOST_AGENT_FILE_CHANGES=1`.
+Use `ORBIT_APP_HOST_AGENT=1` as well only when you need to select Host explicitly.
+Only `write` and exact-text `edit`
 are added. File changes require existing parent directories. Multi-file
 patches, shell, and Git are not exposed. Each file
 change needs explicit approval of the Core-prepared operation. A one-shot
@@ -159,8 +179,9 @@ at an unavailable endpoint and does not contact model providers.
 ### Workspace-only execution boundary (development)
 
 A separate Docker image handles one prepared `write` or `edit` request at a
-time. The App defaults to its existing Docker worker for all tools. For local
-development, rebuild that worker and the runner, then opt in before launching:
+time. The legacy route still uses its existing Docker worker for all tools
+unless opted in. For local legacy development, rebuild that worker and the
+runner, then opt in before launching:
 
 ```sh
 npm run worker:build

@@ -14,6 +14,7 @@
     "lint": "biome lint src test scripts worker --error-on-warnings",
     "test": "tsx --test --test-concurrency=1 test/*.test.ts worker/*.test.mjs",
     "test:electron-sqlite": "node scripts/electron-sqlite-smoke.mjs",
+    "test:host-package": "npm run package -- --verify",
     "test:host-default": "npm run build -- --fresh-host-default && node scripts/electron-sqlite-smoke.mjs host-default-proof",
     "test:host-profile-transition": "npm run build && node scripts/electron-sqlite-smoke.mjs host-profile-transition",
     "test:host-file-changes": "npm run build && node scripts/electron-sqlite-smoke.mjs host-file-changes",

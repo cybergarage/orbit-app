@@ -1,4 +1,21 @@
-# Prototype verification — 2026-10-03
+# Orbit App verification
+
+## Current native-package acceptance
+
+On macOS arm64 with the pinned native toolchain, `npm run test:host-package`
+invokes the usual `npm run package` build with disposable output. It uses the
+real packaged Electron app, normal renderer IPC, a local synthetic provider,
+and Docker. It checks legacy switch-back with the same Project memory and
+moved Chat, denied/approved file operations, and the fresh read-only default
+with failure closed on missing reader or SQLite. The profiles and fixture
+images are temporary. The final case removes the addon from the disposable
+bundle only. It never opens an installed App or a real profile.
+
+The existing Linux Actions job covers portable checks and real Docker fixtures;
+it does not build or launch the macOS arm64 package. Do not treat a Linux green
+build as evidence of native Electron ABI or default-profile acceptance.
+
+## Legacy prototype verification — 2026-10-03
 
 Verified on `mac-mini-m4.local` only: Apple M4 / arm64 / 24 GiB, macOS 27.0.1 (26A434), Node v26.5.0, npm 11.17.0, Homebrew Git 2.55.0, Electron 44.5.1, React 19.2.8, TypeScript 5.9.3. Docker Desktop 4.55.0 (213807), engine 29.1.3; native Ollama 0.34.4. Worker Node v22.23.3. The main M6 was not used. No Xcode license was accepted.
 

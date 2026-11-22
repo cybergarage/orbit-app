@@ -1,5 +1,7 @@
 # Core-backed display names
 
+This document describes the retained legacy Docker metadata route. In the native Host Agent, Electron owns the App catalog and session metadata; see [profile selection](../README.md#host-agent-profile-selection).
+
 Orbit App pins the published `@cybergarage/orbit` **0.9.3** package and its npm integrity in `worker/package-lock.json`. The single development image tag is `orbit-app-worker:core-0.9.3`; builds reuse that tag, never replace the preceding image tag, and runtime uses `--pull=never`. Neither a neighboring Orbit checkout nor an unpublished source artifact is used.
 
 ## Ownership and storage

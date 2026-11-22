@@ -275,6 +275,10 @@ export class Supervisor {
 			models: [],
 			detail: [],
 		};
+		if (this.hostAgent)
+			health.detail.push(
+				"This Host Agent uses a separate profile. Relaunch with ORBIT_APP_HOST_AGENT=0 to open the legacy profile.",
+			);
 		try {
 			await command(dockerPath, ["info", "--format", "{{.ServerVersion}}"]);
 			health.docker = true;

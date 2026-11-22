@@ -7,6 +7,11 @@ await build({
 	platform: "node",
 	format: "cjs",
 	external: ["electron", "@cybergarage/orbit", "@cybergarage/orbit/*"],
+	define: {
+		__ORBIT_APP_FRESH_HOST_DEFAULT__: JSON.stringify(
+			process.argv.includes("--fresh-host-default"),
+		),
+	},
 	outfile: "dist/main.cjs",
 });
 await build({

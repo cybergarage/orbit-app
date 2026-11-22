@@ -14,6 +14,8 @@ assert.ok(
 		"probe",
 		"host-proof",
 		"host-package",
+		"default-package",
+		"host-default-proof",
 		"host-file-changes",
 		"host-profile-transition",
 	].includes(mode),
@@ -180,10 +182,13 @@ try {
 		process.env,
 		240_000,
 	);
-	const out =
-		mode === "host-package"
-			? path.join(root, "release/host-agent")
-			: path.join(scratch, "packaged");
+	const release = mode === "host-package" || mode === "default-package";
+	const out = release
+		? path.join(
+				root,
+				mode === "host-package" ? "release/host-agent" : "release",
+			)
+		: path.join(scratch, "packaged");
 	const name = probe ? "OrbitSQLiteProbe" : "Orbit App";
 	const appBundleId = probe
 		? "org.cybergarage.orbit-app.sqliteprobe"
@@ -193,7 +198,7 @@ try {
 		out,
 		name,
 		appBundleId,
-		overwrite: mode === "host-package",
+		overwrite: release,
 		electronVersion,
 		platform: "darwin",
 		arch: "arm64",
@@ -207,8 +212,13 @@ try {
 	const bundle = path.join(binaries[0], `${name}.app`);
 	const emitted = path.join(bundle, "Contents/MacOS", name);
 	if (!probe) {
-		if (mode === "host-package") console.log(bundle);
-		else if (mode === "host-file-changes") {
+		if (release) console.log(bundle);
+		else if (mode === "host-default-proof") {
+			const { verifyPackagedHostDefault } = await import(
+				"./host-default-app-smoke.mjs"
+			);
+			await verifyPackagedHostDefault(bundle, emitted, scratch, root);
+		} else if (mode === "host-file-changes") {
 			const { verifyPackagedWorkspaceWrites } = await import(
 				"./host-file-changes-app-smoke.mjs"
 			);

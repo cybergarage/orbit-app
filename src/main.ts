@@ -3,8 +3,11 @@ import { app, BrowserWindow, ipcMain, dialog, nativeTheme } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Supervisor } from "./supervisor";
-import { openHostAgentProfile } from "./host-profile";
+import { openHostAgentProfile, selectHostAgent } from "./host-profile";
 import { createDockerHostWriter } from "./host-agent";
+// Only the native-addon package enables the default. Source and legacy
+// package builds still support the explicit development opt-in.
+declare const __ORBIT_APP_FRESH_HOST_DEFAULT__: boolean;
 let window: BrowserWindow;
 let supervisor: Supervisor;
 let closing = false;
@@ -12,18 +15,24 @@ let timer: NodeJS.Timeout;
 const testMode = process.env.ORBIT_APP_TEST === "1";
 if (testMode && process.env.ORBIT_APP_DATA)
 	app.setPath("userData", process.env.ORBIT_APP_DATA);
-const hostAgent = process.env.ORBIT_APP_HOST_AGENT === "1";
-if (hostAgent) {
-	try {
-		app.setPath("userData", openHostAgentProfile(app.getPath("userData")));
-	} catch (error) {
+let hostAgent = false;
+try {
+	const baseProfile = app.getPath("userData");
+	hostAgent = selectHostAgent(
+		baseProfile,
+		process.env.ORBIT_APP_HOST_AGENT,
+		app.isPackaged && __ORBIT_APP_FRESH_HOST_DEFAULT__,
+	);
+	if (hostAgent) app.setPath("userData", openHostAgentProfile(baseProfile));
+} catch (error) {
+	if (testMode) console.error(String(error));
+	else
 		dialog.showErrorBox(
-			"Orbit App could not open the Host Agent profile",
+			"Orbit App could not select a safe profile",
 			String(error),
 		);
-		app.exit(1);
-		throw error;
-	}
+	app.exit(1);
+	throw error;
 }
 const profileOwned = app.requestSingleInstanceLock();
 if (!profileOwned) {

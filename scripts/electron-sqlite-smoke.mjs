@@ -8,7 +8,13 @@ import path from "node:path";
 import { packager } from "@electron/packager";
 
 const root = path.resolve(import.meta.dirname, "..");
-const mode = process.argv[2] ?? "probe";
+const [mode = "probe", ...flags] = process.argv.slice(2);
+const verifyRelease =
+	mode === "default-package" && flags.length === 1 && flags[0] === "--verify";
+assert.ok(
+	flags.length === 0 || verifyRelease,
+	"Only default-package accepts --verify",
+);
 assert.ok(
 	[
 		"probe",
@@ -182,7 +188,8 @@ try {
 		process.env,
 		240_000,
 	);
-	const release = mode === "host-package" || mode === "default-package";
+	const release =
+		!verifyRelease && (mode === "host-package" || mode === "default-package");
 	const out = release
 		? path.join(
 				root,
@@ -213,7 +220,12 @@ try {
 	const emitted = path.join(bundle, "Contents/MacOS", name);
 	if (!probe) {
 		if (release) console.log(bundle);
-		else if (mode === "host-default-proof") {
+		else if (verifyRelease) {
+			const { verifyOrdinaryHostPackage } = await import(
+				"./host-package-app-smoke.mjs"
+			);
+			await verifyOrdinaryHostPackage(bundle, emitted, scratch, root);
+		} else if (mode === "host-default-proof") {
 			const { verifyPackagedHostDefault } = await import(
 				"./host-default-app-smoke.mjs"
 			);

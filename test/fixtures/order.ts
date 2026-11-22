@@ -64,6 +64,7 @@ export function orderFixture(root: string, changed: (s: Snapshot) => void) {
 		healthReady: () => healthReady,
 		finish: () => finish(),
 		starts: () => starts,
+		hasWorker: () => !!sup.worker,
 	};
 }
 export function seedOrderFixture(): Snapshot {

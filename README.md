@@ -18,7 +18,9 @@ Current Electron UI in Light appearance, with compact Project/Chat navigation, u
 
 ## About Orbit
 
-[Orbit](https://github.com/cybergarage/orbit) is the TypeScript agent execution framework underlying this app. It provides model adapters, including Ollama, tools, sessions, and execution and approval controls. Orbit App adds the desktop interface and coordinates native host Ollama with containerized Orbit workers.
+[Orbit](https://github.com/cybergarage/orbit) is the TypeScript agent execution framework underlying this app. It provides model adapters, including Ollama, tools, sessions, and execution and approval controls. Orbit App adds the desktop interface. In Host mode, Electron owns the Agent
+and uses separate Docker executors for workspace operations. The retained
+legacy route still runs its Agent in the Docker worker.
 
 ## Requirements
 
@@ -101,12 +103,13 @@ See [verification and security limitations](docs/verification.md) for tested beh
 
 Chats within each Project and the unassigned Chats group follow accepted user submissions, newest first. Typing, viewing, responses, names and scheduled work do not affect this order. Rejected requests do not move Chats; failures after acceptance keep their position. Order survives restart and project moves. Older Chats without explicit submission ordering retain their relative saved order until their next user submission; historical submissions have no reliable human/schedule origin and are not inferred. Project order is unchanged.
 
-Settings → Initialization supports settings-only, saved-data, and settings/data/dedicated-cache initialization through the pinned local Orbit Core maintenance API. Each flow previews exact App-owned targets, stops and verifies writers, creates a final metadata plan, and requires explicit permanent confirmation and external exclusive-control declarations. Working files, external workspaces, shared context, unknown objects and browser profile data remain outside the allowlist. Incomplete initialization stays offline across restart; success requires restart. See [scope, ownership and failure behavior](docs/initialization-adoption.md).
+On the legacy route, Settings → Initialization supports settings-only, saved-data, and settings/data/dedicated-cache initialization through the pinned local Orbit Core maintenance API. The Host Agent does not expose these operations. Each flow previews exact App-owned targets, stops and verifies writers, creates a final metadata plan, and requires explicit permanent confirmation and external exclusive-control declarations. Working files, external workspaces, shared context, unknown objects and browser profile data remain outside the allowlist. Incomplete initialization stays offline across restart; success requires restart. See [scope, ownership and failure behavior](docs/initialization-adoption.md).
 
 Model choices come from Core's credential-aware provider catalog: choose Ollama,
 Claude (Anthropic), or OpenAI together with a compatible available model in one list. Read-only Models
-API verification is not an inference/billing check. Keys stay on the host; workers
-use the selected real adapter through constrained RPC. Settings defaults apply to
+API verification is not an inference/billing check. Keys stay on the host:
+Electron owns model transport in Host mode, and legacy workers use constrained
+RPC. Settings defaults apply to
 new chats; existing choices and admitted runs remain isolated. No models are downloaded.
 The bundled Core includes ModelCatalog and ModelGateway. Its exact clean source
 commit and artifact hash are recorded in worker/packages/core-artifact.json;
@@ -136,8 +139,15 @@ ORBIT_APP_HOST_AGENT=1 "$APP"   # open only the separate Host profile
 Electron owns the Host Agent, model transport, session/journal state, Project
 source leases, and its SQLite catalog. Missing/invalid native SQLite refuses
 startup; missing Docker reader refuses task admission. Neither failure reopens
-legacy. Run `npm run test:host-default` on macOS arm64 for a disposable packaged
-proof of default selection, no fallback, and explicit reversion.
+legacy.
+
+On the pinned macOS arm64 packaging toolchain, run `npm run test:host-package`
+to build the ordinary package in a disposable location and verify fresh
+default/no fallback, explicit legacy switch-back, and approved file changes
+in one run. It uses Docker and loopback models only. The reader, writer and
+legacy worker tags must be unused; existing tags are never replaced. For
+just the fresh-default smoke, use `npm run test:host-default`. The Linux CI
+job exercises the Docker and application fixtures, not native macOS packaging.
 
 See [Host Agent and legacy profile adoption](docs/host-agent-adoption.md)
 for the verified switch-back behavior and the prerequisites for any future
@@ -149,7 +159,7 @@ and no network or state. Bash, project-native build/test, plugins, MCP, and
 data initialization remain unavailable in this mode.
 The Host Agent uses the standalone image below and does not fall back to the
 legacy worker image or a host read. Interrupted runs are not replayed.
-Removal of the legacy default Agent is a separate change.
+Retiring the legacy route is separate from selecting Host for fresh profiles.
 
 File changes are separately opt-in: build `npm run worker:workspace:build`
 and launch the Host Agent with `ORBIT_APP_HOST_AGENT_FILE_CHANGES=1`.
@@ -241,10 +251,13 @@ node --import tsx scripts/workspace-reader-image-smoke.ts
 This image packages only the existing bounded `read`, `list`, `glob`, and
 `grep` implementation and its lock-pinned search libraries. Its build context
 excludes the Orbit package, legacy Agent, metadata helpers, and session data.
-The image has no Orbit Core or application SQLite module. Only the opt-in
-Host Agent selects this image. Default and legacy tool routing are unchanged. CI verifies
-execution by immutable image ID with one nonrecursive, read-only workspace
-bind, no network, no state or catalog mount, and only disposable test files.
+The image has no Orbit Core or application SQLite module. The Host Agent
+selects it whether Host is chosen by the fresh-package default or by
+`ORBIT_APP_HOST_AGENT=1`. The legacy route does not use this image.
+Linux CI verifies execution by immutable image ID with one nonrecursive,
+read-only workspace bind, no network, no state or catalog mount, and only
+disposable test files. The macOS package proof also verifies actual admission,
+read-only use, and refusal without fallback when the image is unavailable.
 
 ### Fixed workspace command experiment (not connected to the App)
 
@@ -261,7 +274,16 @@ image from the existing pinned Debian-based Node image, not at runtime.
 
 The experiment reports a checked exit separately from refusal and unknown
 termination. It does not register a tool, change user settings, call a model,
-or enable a second execution path. Production Bash continues on its original
-route. Before activating the command executor, Core must bind the exact
-trusted execution profile to approval, preserve command-result provenance
-and define cancellation and output semantics without allowing backend fallback.
+or enable a second execution path. The Host Agent exposes no command tools;
+the retained legacy route's existing Bash is unchanged.
+
+[Core #52](https://github.com/cybergarage/orbit/pull/52) supplies the upstream
+hosted-command approval contract: immutable backend profile, exact command
+and deadline, settled-result provenance, and unknown-on-uncertainty without
+fallback. The App's current audited Core artifact predates that contract.
+The [fixture in App #18](https://github.com/cybergarage/orbit-app/pull/18)
+does not connect it to the Agent. Any later opt-in first needs a reproducible
+Core repin and an App-owned adapter that admits the same image, accepts only
+reviewed fixed operations, enforces the approved workspace and output bounds,
+and verifies cancellation/teardown or preserves an unknown result. No App
+command activation or permission change is part of this verification.

@@ -9,7 +9,9 @@ import { packager } from "@electron/packager";
 
 const root = path.resolve(import.meta.dirname, "..");
 const mode = process.argv[2] ?? "probe";
-assert.ok(["probe", "host-proof", "host-package"].includes(mode));
+assert.ok(
+	["probe", "host-proof", "host-package", "host-file-changes"].includes(mode),
+);
 const probe = mode === "probe";
 const electronVersion = "44.5.1";
 const sqliteVersion = "12.11.1";
@@ -200,7 +202,12 @@ try {
 	const emitted = path.join(bundle, "Contents/MacOS", name);
 	if (!probe) {
 		if (mode === "host-package") console.log(bundle);
-		else {
+		else if (mode === "host-file-changes") {
+			const { verifyPackagedWorkspaceWrites } = await import(
+				"./host-file-changes-app-smoke.mjs"
+			);
+			await verifyPackagedWorkspaceWrites(emitted, scratch, root);
+		} else {
 			const { verifyPackagedCatalog } = await import(
 				"./host-catalog-app-smoke.mjs"
 			);

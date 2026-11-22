@@ -4,8 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-import { _electron as electron } from "@playwright/test";
+import { _electron as electron, expect } from "@playwright/test";
 
 const model = { provider: "openai", model: "gpt-4o" };
 const key = "synthetic-packaged-fixture-not-a-credential";
@@ -28,7 +27,7 @@ function docker(args, env, timeout = 10_000) {
 
 function fixtureProvider() {
 	const requests = [];
-	let tools = [];
+	let tools = new Set();
 	let expected = [];
 	let failure;
 	const server = createServer(async (req, res) => {
@@ -65,10 +64,13 @@ function fixtureProvider() {
 			}
 			const request = JSON.parse(Buffer.concat(chunks));
 			assert.equal(request.model, model.model);
-			assert.deepEqual(
-				(request.tools ?? []).map((tool) => tool.function.name).sort(),
-				tools,
+			const offered = (request.tools ?? []).map((tool) => tool.function.name);
+			assert.equal(
+				offered.length,
+				tools.size,
+				"Tool names must not be duplicated",
 			);
+			assert.deepEqual(new Set(offered), tools);
 			assert.ok(expected.length > 0, "Unexpected chat request");
 			requests.push(request);
 			const [name, args] = expected.shift();
@@ -116,7 +118,7 @@ function fixtureProvider() {
 		server,
 		requests,
 		plan(names, sequence) {
-			tools = [...names].sort();
+			tools = new Set(names);
 			expected = [...sequence];
 		},
 		verify() {
@@ -131,13 +133,17 @@ function snapshot(page) {
 }
 
 async function until(read, state) {
-	const deadline = performance.now() + 30_000;
-	while (performance.now() < deadline) {
-		const result = await read();
-		if (result) return result;
-		await delay(50);
-	}
-	throw new Error(`Timed out waiting for ${state}`);
+	let match;
+	await expect
+		.poll(
+			async () => {
+				match = await read();
+				return Boolean(match);
+			},
+			{ message: `Waiting for ${state}`, timeout: 30_000 },
+		)
+		.toBe(true);
+	return match;
 }
 
 function waitIdle(page) {
@@ -331,11 +337,7 @@ export async function verifyPackagedWorkspaceWrites(
 		await submit("Exercise approved file changes in a synthetic workspace.");
 		let previous;
 		let owner;
-		for (const [index, name, target, button] of [
-			[0, "write", "denied.txt", "Deny"],
-			[1, "write", "fixture.txt", "Approve"],
-			[2, "edit", "fixture.txt", "Approve"],
-		]) {
+		const review = async ({ name, target, button, before, rejectStale }) => {
 			const expectedPath = path.join(workspace, target);
 			// Playwright's polling predicate is synchronous. Poll the
 			// asynchronous renderer IPC snapshot in this test process.
@@ -370,9 +372,10 @@ export async function verifyPackagedWorkspaceWrites(
 			assert.equal(active.workspaceMutations, true);
 			checkGone(env, owner);
 			await assert.rejects(fs.stat(denied), { code: "ENOENT" });
-			if (index < 2) await assert.rejects(fs.stat(file), { code: "ENOENT" });
-			else assert.equal(await fs.readFile(file, "utf8"), "approved before");
-			if (index === 0)
+			if (before === undefined)
+				await assert.rejects(fs.stat(file), { code: "ENOENT" });
+			else assert.equal(await fs.readFile(file, "utf8"), before);
+			if (rejectStale)
 				await assert.rejects(
 					page.evaluate(
 						(id) => window.orbit.call("approve", { id, approve: true }),
@@ -381,7 +384,21 @@ export async function verifyPackagedWorkspaceWrites(
 					/Approval is no longer pending/,
 				);
 			await page.getByRole("button", { name: button, exact: true }).click();
-		}
+		};
+		// Each decision must release the model before the next step can ask.
+		await review({
+			name: "write",
+			target: "denied.txt",
+			button: "Deny",
+			rejectStale: true,
+		});
+		await review({ name: "write", target: "fixture.txt", button: "Approve" });
+		await review({
+			name: "edit",
+			target: "fixture.txt",
+			button: "Approve",
+			before: "approved before",
+		});
 		await waitIdle(page);
 		provider.verify();
 		assert.equal(provider.requests.length, 4);

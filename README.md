@@ -138,6 +138,14 @@ Docker executor mounts only the selected workspace (writable, without nested
 mounts); the image contains neither Orbit nor SQLite. A missing image stops
 admission; uncertain effects are not replayed or sent to another backend.
 
+Run `npm run test:host-file-changes` on the macOS arm64 native packaging toolchain
+for the packaged approval smoke. It uses a disposable profile and loopback
+fixture, exercises the renderer's Deny and Approve buttons, verifies only
+approved writes/edits, then reopens in read-only mode. It requires a local
+Docker daemon and the two App runner tags to be unused. It refuses to replace
+existing images and removes only the fixture tags that still match its own
+image IDs.
+
 Run `npm run test:host-catalog` for a disposable actual packaged App smoke:
 create a synthetic Project over normal App IPC, quit and relaunch with the
 same profile, verify its ID, and verify that removing the disposable bundle's

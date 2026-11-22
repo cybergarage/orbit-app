@@ -79,6 +79,7 @@ export function dockerWorkspaceArgs(
 	workspace: string,
 	runnerImage = workspaceImage,
 	readOnly = false,
+	nonrecursiveWritable = false,
 ) {
 	if (
 		!(
@@ -98,10 +99,26 @@ export function dockerWorkspaceArgs(
 	return [
 		...dockerIsolationArgs(name, "org.cybergarage.orbit-app.role=workspace"),
 		"--mount",
-		`type=bind,src=${workspace},dst=/workspace${readOnly ? ",readonly,bind-recursive=disabled" : ""}`,
+		`type=bind,src=${workspace},dst=/workspace${readOnly ? ",readonly,bind-recursive=disabled" : nonrecursiveWritable ? ",bind-recursive=disabled" : ""}`,
 		"--workdir",
 		"/workspace",
 		...workerUserArgs(),
+		// Docker's CLI may inject proxy settings from its own configuration.
+		// Use explicit empty values for the Host writer, never inherit them.
+		...(nonrecursiveWritable
+			? [
+					"HTTP_PROXY",
+					"HTTPS_PROXY",
+					"NO_PROXY",
+					"ALL_PROXY",
+					"FTP_PROXY",
+				].flatMap((key) => [
+					"--env",
+					`${key}=`,
+					"--env",
+					`${key.toLowerCase()}=`,
+				])
+			: []),
 		...(readOnly ? ["--entrypoint", "node"] : []),
 		runnerImage,
 		...(readOnly ? ["/opt/worker/workspace-reader.mjs"] : []),
@@ -176,6 +193,25 @@ export async function admitWorkspaceReaderImage(
 	} catch (cause) {
 		throw new Error(
 			"Host Agent requires the standalone Docker reader. Run npm run worker:reader:build.",
+			{ cause },
+		);
+	}
+}
+
+export async function admitWorkspaceWriterImage(
+	run = command,
+	imageRef = workspaceImage,
+) {
+	try {
+		return await admitDockerImage(
+			imageRef,
+			workspaceRunnerLabel,
+			"standalone workspace writer",
+			run,
+		);
+	} catch (cause) {
+		throw new Error(
+			"Host Agent file changes require the standalone Docker writer. Run npm run worker:workspace:build.",
 			{ cause },
 		);
 	}

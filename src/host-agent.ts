@@ -14,13 +14,17 @@ import type {
 import { hostOriginator, hostRepository } from "./host-core";
 import {
 	admitWorkspaceReaderImage,
+	admitWorkspaceWriterImage,
 	command,
 	dockerPath,
 	dockerWorkspaceArgs,
 	stopWorkerWorkspaceMutation,
 	verifySessionWriterReleased,
 } from "./worker";
-import { executeWorkspaceObservation } from "./workspace-mutation-client";
+import {
+	executeWorkspaceMutation,
+	executeWorkspaceObservation,
+} from "./workspace-mutation-client";
 
 const readers = ["read", "list", "glob", "grep"] as const;
 type Reader = (typeof readers)[number];
@@ -70,6 +74,49 @@ export function createDockerHostReader(
 	};
 }
 const dockerReader = createDockerHostReader();
+
+const mutations = ["write", "edit"] as const;
+const canMutate = (name: string) => mutations.some((tool) => tool === name);
+
+export interface HostWriter {
+	admit(): Promise<string>;
+	mutate(
+		parent: string,
+		workspace: string,
+		artifact: string,
+		operation: PreparedWorkspaceOperation,
+		signal: AbortSignal,
+	): Promise<ToolResult>;
+	stop(parent: string): Promise<unknown>;
+}
+
+export function createDockerHostWriter(
+	imageRef?: string,
+	run: typeof command = command,
+): HostWriter {
+	return {
+		admit: () => admitWorkspaceWriterImage(run, imageRef),
+		mutate: (parent, workspace, artifact, operation, signal) =>
+			executeWorkspaceMutation(
+				parent,
+				workspace,
+				operation,
+				signal,
+				{
+					docker: dockerPath,
+					command: run,
+					args: (name, root) =>
+						dockerWorkspaceArgs(name, root, artifact, false, true),
+				},
+				workspace,
+			),
+		stop: (parent) => stopWorkerWorkspaceMutation(parent),
+	};
+}
+
+type HostApproval = Parameters<
+	NonNullable<NonNullable<AgentOptions["execution"]>["onApproval"]>
+>[0];
 
 interface HostRunConfig {
 	sessionId: string;
@@ -128,10 +175,9 @@ function projectMemory(
 	return adapter as Service;
 }
 
-/** Runs Core in the host; only the built-in read tools are visible. */
+/** Runs Core in the host; only explicitly routed file tools are visible. */
 export class HostAgentRun {
-	readonly name = `orbit-app-${randomUUID()}`; // used solely for reader ownership
-	readonly workspaceMutationsEnabled = false;
+	readonly name = `orbit-app-${randomUUID()}`; // durable executor child ownership
 	readonly workspaceReadsEnabled = true;
 	private readonly controller = new AbortController();
 	private agent?: Agent;
@@ -139,6 +185,8 @@ export class HostAgentRun {
 	private handle?: Awaited<ReturnType<Agent["startRun"]>>;
 	private running?: Promise<void>;
 	private readerAdmitted = false;
+	private writerAdmitted = false;
+	private approval?: HostApproval;
 	private readerBlocked = false;
 	private readerTail = Promise.resolve();
 	private toolCalls = 0;
@@ -151,10 +199,35 @@ export class HostAgentRun {
 		private event: (event: { type: string; data: unknown }) => void,
 		private request: ProviderRequest,
 		private reader: HostReader = dockerReader,
+		private writer?: HostWriter,
 	) {}
 
-	approve(_id: unknown, _approval: unknown) {
-		throw new Error("Host development mode has no mutable or command tools");
+	get workspaceMutationsEnabled() {
+		return this.writer !== undefined;
+	}
+
+	async approve(id: unknown, approve: unknown) {
+		const request = this.approval;
+		if (
+			!this.writer ||
+			!request ||
+			!this.agent ||
+			this.controller.signal.aborted ||
+			request.expiresAt <= Date.now() ||
+			request.sessionId !== this.config.sessionId ||
+			request.responderScope !== "desktop-owner" ||
+			(this.handle !== undefined && this.handle.id !== request.runId) ||
+			id !== request.id ||
+			typeof approve !== "boolean"
+		)
+			throw new Error("Approval is no longer pending");
+		this.approval = undefined;
+		await this.agent.replyApproval(request.runId, {
+			requestId: request.id,
+			digest: request.digest,
+			responderScope: request.responderScope,
+			approve,
+		});
 	}
 
 	start() {
@@ -164,20 +237,28 @@ export class HostAgentRun {
 
 	async stop() {
 		this.controller.abort();
+		this.approval = undefined;
 		this.handle?.requestStop("User cancelled");
 		await this.running?.catch(() => {});
 	}
 
 	async confirmGone() {
 		await this.readerTail;
+		if (this.writerAdmitted) await this.writer?.stop(this.name);
 		if (this.readerAdmitted) await this.reader.stop(this.name);
 		await verifySessionWriterReleased(this.core, this.config.sessionId);
 	}
 
-	private readOnlyRunner(image: string, before: string): WorkspaceExecutor {
+	private fileRunner(
+		image: string,
+		before: string,
+		writerImage?: string,
+	): WorkspaceExecutor {
 		return {
-			toolNames: readers,
+			toolNames: writerImage ? [...readers, ...mutations] : readers,
 			execute: (op, runSignal) => {
+				if (op.effect === "write")
+					return this.mutate(op, runSignal, before, writerImage);
 				if (
 					++this.toolCalls > maxFiles ||
 					op.effect !== "read" ||
@@ -221,6 +302,42 @@ export class HostAgentRun {
 		};
 	}
 
+	private async mutate(
+		op: PreparedWorkspaceOperation,
+		runSignal: AbortSignal,
+		before: string,
+		artifact?: string,
+	): Promise<ToolResult> {
+		const writer = this.writer;
+		if (
+			!writer ||
+			!artifact ||
+			++this.toolCalls > maxFiles ||
+			!canMutate(op.name) ||
+			op.cwd !== this.workspace ||
+			op.target === this.workspace ||
+			!withinRoot(this.workspace, op.target)
+		)
+			throw new Error("Prepared workspace mutation is not available");
+		const signal = AbortSignal.any([runSignal, this.controller.signal]);
+		const task = this.readerTail.then(async () => {
+			signal.throwIfAborted();
+			if (this.readerBlocked || (await identity(this.workspace)) !== before)
+				throw new Error("Workspace no longer matches the admitted mount");
+			signal.throwIfAborted();
+			return writer.mutate(this.name, this.workspace, artifact, op, signal);
+		});
+		this.readerTail = task.then(
+			() => {},
+			() => {
+				// Keep a lost acknowledgment unknown in Core. Never try another
+				// execution backend or reuse this run's executor queue.
+				this.readerBlocked = true;
+			},
+		);
+		return task;
+	}
+
 	private async run() {
 		const signal = this.controller.signal;
 		const before = await identity(this.workspace);
@@ -229,6 +346,13 @@ export class HostAgentRun {
 		signal.throwIfAborted();
 		if (!/^sha256:[a-f0-9]{64}$/.test(image))
 			throw new Error("Isolated reader image identity is invalid");
+		const writerImage = await this.writer?.admit();
+		if (this.writer) {
+			if (!writerImage || !/^sha256:[a-f0-9]{64}$/.test(writerImage))
+				throw new Error("Isolated writer image identity is invalid");
+			this.writerAdmitted = true;
+		}
+		signal.throwIfAborted();
 		const api = await import("@cybergarage/orbit");
 		const repo = await hostRepository(this.core);
 		const found = await repo.findById(this.config.sessionId);
@@ -241,6 +365,7 @@ export class HostAgentRun {
 				"Session does not belong to this host profile and selected workspace",
 			);
 		this.session = repo.open(found.file);
+		let terminalReported = false;
 		try {
 			this.session.selectModel({
 				model: this.config.model,
@@ -280,7 +405,11 @@ export class HostAgentRun {
 				settings: {
 					model: this.config.model,
 					provider: this.config.provider,
-					tools: { profile: "none", include: [...readers], exclude: [] },
+					tools: {
+						profile: "none",
+						include: writerImage ? [...readers, ...mutations] : [...readers],
+						exclude: [],
+					},
 				},
 				...(projectContext
 					? { projectMemory: projectMemory(api, projectContext) }
@@ -299,10 +428,14 @@ export class HostAgentRun {
 						mcpServers: 0,
 					},
 					policy: {
-						generation: "orbit-app-host-readonly-v1",
+						generation: writerImage
+							? `orbit-app-host-files-v1:${writerImage}`
+							: "orbit-app-host-readonly-v1",
 						profile: "workspace-confirm",
 						roots: [this.workspace],
 						decide: (op) => {
+							if (op.effect === "write" && writerImage && canMutate(op.name))
+								return "ask";
 							const input = op.input as
 								| { pattern?: unknown; glob?: unknown }
 								| undefined;
@@ -314,7 +447,27 @@ export class HostAgentRun {
 								: "deny";
 						},
 					},
-					workspaceExecutor: this.readOnlyRunner(image, before),
+					workspaceExecutor: this.fileRunner(image, before, writerImage),
+					...(writerImage
+						? {
+								responderScope: "desktop-owner",
+								onApproval: (request: HostApproval) => {
+									if (signal.aborted) return;
+									this.approval = request;
+									this.event({
+										type: "approval",
+										data: {
+											...request,
+											preview: {
+												...request.preview,
+												execution:
+													"Isolated Docker writer; selected workspace only",
+											},
+										},
+									});
+								},
+							}
+						: {}),
 				},
 			});
 			// Remove inert inherited settings from the host run's journal as well.
@@ -334,6 +487,7 @@ export class HostAgentRun {
 			);
 			if (signal.aborted) this.handle.requestStop("User cancelled");
 			const runtime = await this.handle.finished;
+			terminalReported = true;
 			this.event({
 				type: "result",
 				data: {
@@ -350,11 +504,23 @@ export class HostAgentRun {
 				});
 			throw error;
 		} finally {
-			try {
-				await this.agent?.close();
-			} finally {
-				await this.session.close();
-			}
+			this.approval = undefined;
+			await this.closeSession(this.session, terminalReported);
 		}
+	}
+
+	private async closeSession(session: Session, terminalReported: boolean) {
+		try {
+			await this.agent?.close();
+		} catch (error) {
+			// An unknown effect can retain Core's managed lease indefinitely.
+			// Do not wait on it here or clear it. The supervisor must verify
+			// the owner marker and keep recovery blocked.
+			void session.close().catch(() => {});
+			if (!terminalReported) throw error;
+			this.event({ type: "cleanup-error", data: String(error) });
+			return;
+		}
+		await session.close();
 	}
 }

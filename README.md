@@ -120,6 +120,10 @@ profile lock. Missing or invalid native SQLite and retained helper recovery
 markers refuse startup; there is no SQLite container fallback. The normal
 App package, profile and Docker-backed default route are unchanged.
 
+See [Host Agent and legacy profile adoption](docs/host-agent-adoption.md)
+for the verified switch-back behavior and the prerequisites for any future
+adoption action.
+
 This slice supports chat and Docker-only `read`, `list`, `glob`, and `grep`.
 The admitted workspace reader has one read-only nonrecursive workspace bind
 and no network or state. Bash, project-native build/test, plugins, MCP, and

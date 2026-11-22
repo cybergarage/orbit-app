@@ -12,10 +12,11 @@ const dockerPath = "/usr/local/bin/docker";
 const pathEnv = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin";
 const readerTools = ["glob", "grep", "list", "read"];
 
-function docker(args, env, timeout = 10_000) {
+export function docker(args, env, timeout = 10_000, input) {
 	const result = spawnSync(dockerPath, args, {
 		timeout,
 		env,
+		input,
 		encoding: "utf8",
 		maxBuffer: 2 * 1024 * 1024,
 		killSignal: "SIGKILL",
@@ -25,7 +26,7 @@ function docker(args, env, timeout = 10_000) {
 	return result.stdout.trim();
 }
 
-function fixtureProvider() {
+export function fixtureProvider() {
 	const requests = [];
 	let tools = new Set();
 	let expected = [];
@@ -128,7 +129,7 @@ function fixtureProvider() {
 	};
 }
 
-function snapshot(page) {
+export function snapshot(page) {
 	return page.evaluate(() => window.orbit.call("snapshot"));
 }
 
@@ -146,7 +147,7 @@ async function until(read, state) {
 	return match;
 }
 
-function waitIdle(page) {
+export function waitIdle(page) {
 	return until(async () => !(await snapshot(page)).active, "run cleanup");
 }
 
@@ -185,7 +186,7 @@ function imageId(env, ref) {
 
 // This opt-in smoke refuses to replace either local App runner tag. It
 // releases only tags that still resolve to the exact images it built.
-function releaseImages(env, images) {
+export function releaseImages(env, images) {
 	for (const { unique, alias, id, aliased } of images.reverse()) {
 		for (const ref of [...(aliased ? [alias] : []), unique])
 			if (imageId(env, ref) === id)
@@ -193,11 +194,7 @@ function releaseImages(env, images) {
 	}
 }
 
-export async function verifyPackagedWorkspaceWrites(
-	executablePath,
-	scratch,
-	root,
-) {
+export async function fixtureDockerEnv(scratch) {
 	const home = path.join(scratch, "test-home");
 	await fs.mkdir(home, { mode: 0o700 });
 	const endpoint = docker([
@@ -207,12 +204,58 @@ export async function verifyPackagedWorkspaceWrites(
 		"{{.Endpoints.docker.Host}}",
 	]);
 	assert.match(endpoint, /^unix:\/\/\/[^ \r\n]+$/);
-	const env = {
+	return {
 		HOME: home,
 		TMPDIR: scratch,
 		PATH: pathEnv,
 		DOCKER_HOST: endpoint,
 	};
+}
+
+export function stageFixtureImages(env, expectedImages, images) {
+	for (const { alias } of expectedImages)
+		assert.equal(
+			imageId(env, alias),
+			"",
+			`The packaged fixture requires an unused local tag: ${alias}`,
+		);
+	for (const { alias, kind, build } of expectedImages) {
+		const unique = `orbit-app-packaged-${kind}-fixture:${randomUUID()}`;
+		docker(["build", "--tag", unique, ...build], env, 150_000);
+		const id = imageId(env, unique);
+		assert.match(id, /^sha256:[a-f0-9]{64}$/);
+		const entry = { alias, unique, id, aliased: false };
+		images.push(entry);
+		assert.equal(
+			imageId(env, alias),
+			"",
+			`The local alias became occupied: ${alias}`,
+		);
+		docker(["image", "tag", id, alias], env);
+		entry.aliased = true;
+	}
+}
+
+export function fixtureAppEnv(env, base, port, host, writes = false) {
+	return {
+		...env,
+		ORBIT_APP_TEST: "1",
+		ORBIT_APP_DATA: base,
+		ORBIT_APP_NO_HEALTH_TEST: "1",
+		ORBIT_APP_LIVE: "0",
+		ORBIT_APP_HOST_AGENT: host ? "1" : "0",
+		ORBIT_APP_HOST_AGENT_FILE_CHANGES: writes ? "1" : "0",
+		OPENAI_BASE_URL: `http://127.0.0.1:${port}/v1`,
+		OPENAI_API_KEY: key,
+	};
+}
+
+export async function verifyPackagedWorkspaceWrites(
+	executablePath,
+	scratch,
+	root,
+) {
+	const env = await fixtureDockerEnv(scratch);
 	const base = path.join(scratch, "legacy");
 	const profile = `${base}-host-agent-native-v2`;
 	const provider = fixtureProvider();
@@ -236,27 +279,7 @@ export async function verifyPackagedWorkspaceWrites(
 	];
 	let app;
 	try {
-		for (const { alias } of expectedImages)
-			assert.equal(
-				imageId(env, alias),
-				"",
-				`The packaged fixture requires an unused local tag: ${alias}`,
-			);
-		for (const { alias, kind, build } of expectedImages) {
-			const unique = `orbit-app-packaged-${kind}-fixture:${randomUUID()}`;
-			docker(["build", "--tag", unique, ...build], env, 150_000);
-			const id = imageId(env, unique);
-			assert.match(id, /^sha256:[a-f0-9]{64}$/);
-			const entry = { alias, unique, id, aliased: false };
-			images.push(entry);
-			assert.equal(
-				imageId(env, alias),
-				"",
-				`The local alias became occupied: ${alias}`,
-			);
-			docker(["image", "tag", id, alias], env);
-			entry.aliased = true;
-		}
+		stageFixtureImages(env, expectedImages, images);
 		await new Promise((resolve, reject) => {
 			server.once("error", reject);
 			server.listen(0, "127.0.0.1", resolve);
@@ -266,17 +289,7 @@ export async function verifyPackagedWorkspaceWrites(
 		const launch = (host, writes) =>
 			electron.launch({
 				executablePath,
-				env: {
-					...env,
-					ORBIT_APP_TEST: "1",
-					ORBIT_APP_DATA: base,
-					ORBIT_APP_NO_HEALTH_TEST: "1",
-					ORBIT_APP_LIVE: "0",
-					ORBIT_APP_HOST_AGENT: host ? "1" : "0",
-					ORBIT_APP_HOST_AGENT_FILE_CHANGES: writes ? "1" : "0",
-					OPENAI_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
-					OPENAI_API_KEY: key,
-				},
+				env: fixtureAppEnv(env, base, address.port, host, writes),
 				timeout: 25_000,
 			});
 		await fs.mkdir(base, { mode: 0o700 });

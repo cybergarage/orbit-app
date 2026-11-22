@@ -10,7 +10,13 @@ import { packager } from "@electron/packager";
 const root = path.resolve(import.meta.dirname, "..");
 const mode = process.argv[2] ?? "probe";
 assert.ok(
-	["probe", "host-proof", "host-package", "host-file-changes"].includes(mode),
+	[
+		"probe",
+		"host-proof",
+		"host-package",
+		"host-file-changes",
+		"host-profile-transition",
+	].includes(mode),
 );
 const probe = mode === "probe";
 const electronVersion = "44.5.1";
@@ -207,6 +213,11 @@ try {
 				"./host-file-changes-app-smoke.mjs"
 			);
 			await verifyPackagedWorkspaceWrites(emitted, scratch, root);
+		} else if (mode === "host-profile-transition") {
+			const { verifyPackagedProfileTransition } = await import(
+				"./host-profile-transition-app-smoke.mjs"
+			);
+			await verifyPackagedProfileTransition(emitted, scratch, root);
 		} else {
 			const { verifyPackagedCatalog } = await import(
 				"./host-catalog-app-smoke.mjs"

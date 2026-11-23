@@ -145,9 +145,12 @@ legacy.
 
 On the pinned macOS arm64 packaging toolchain, run `npm run test:host-package`
 to build the ordinary package in a disposable location and verify fresh
-default/no fallback, explicit legacy switch-back, and approved file changes
-in one run. It uses Docker and loopback models only. The reader, writer and
-legacy worker tags must be unused; existing tags are never replaced. For
+default/no fallback, explicit legacy switch-back, approved file changes, and
+the opt-in fixed readiness probe in one run. The packaged renderer shows the
+bound command preview; denial does not launch the probe, while approval
+executes and removes one owned Docker container. It uses Docker and loopback
+models only. The reader, writer, readiness and legacy worker tags must be
+unused; existing tags are never replaced. For
 just the fresh-default smoke, use `npm run test:host-default`. The Linux CI
 job exercises the Docker and application fixtures, not native macOS packaging.
 

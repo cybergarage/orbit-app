@@ -151,7 +151,7 @@ export function waitIdle(page) {
 	return until(async () => !(await snapshot(page)).active, "run cleanup");
 }
 
-function checkGone(env, owner) {
+export function checkGone(env, owner) {
 	assert.match(owner, /^orbit-app-[a-f0-9-]{36}$/);
 	assert.equal(
 		docker(

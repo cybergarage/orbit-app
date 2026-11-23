@@ -77,6 +77,7 @@ export interface Snapshot {
 	submissionSequence?: number;
 	appearance?: "system" | "light" | "dark";
 	executionBackend?: "host-readonly" | "host-files";
+	executionReadinessProbe?: boolean;
 	namesVersion?: number;
 	executions?: Execution[];
 	projects: Project[];
@@ -89,6 +90,7 @@ export interface Snapshot {
 		readerOwner?: string;
 		workspaceMutations?: boolean;
 		workspaceReads?: boolean;
+		workspaceReadiness?: boolean;
 	};
 	health?: Health;
 	recoveryBlocked?: boolean;

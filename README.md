@@ -261,31 +261,34 @@ read-only workspace bind, no network, no state or catalog mount, and only
 disposable test files. The macOS package proof also verifies actual admission,
 read-only use, and refusal without fallback when the image is unavailable.
 
-### Fixed workspace command experiment (not connected to the App)
+### Opt-in fixed Host Agent readiness probe
 
-`node --import tsx scripts/workspace-command-docker-smoke.ts` exercises a
-one-shot fixture image with a single read-only, nonrecursive workspace mount,
-network off, fixed subprocess arguments/environment, explicit deadline and
-bounded output. It accepts named operations only: a constant Bash probe,
-tracked Git index entries (without loading workspace Git config), Node syntax
-validation, and one local Node test file. Test files are executable code;
-use only trusted disposable fixtures in this experiment. No general shell,
-networked Git, dependency installation, linked worktrees, or production
-build execution is added. Git is installed when CI builds the disposable
-image from the existing pinned Debian-based Node image, not at runtime.
+The ordinary Host Agent still exposes only read/search by default, with the
+existing separate file-change option. A development-only opt-in admits one
+fixed Bash readiness probe per run; no general shell or project code runs.
 
-The experiment reports a checked exit separately from refusal and unknown
-termination. It does not register a tool, change user settings, call a model,
-or enable a second execution path. The Host Agent exposes no command tools;
-the retained legacy route's existing Bash is unchanged.
+```sh
+npm run worker:reader:build
+npm run worker:readiness:build
+ORBIT_APP_HOST_AGENT=1 ORBIT_APP_HOST_AGENT_READINESS_PROBE=1 npm run dev
+```
 
-[Core #52](https://github.com/cybergarage/orbit/pull/52) supplies the upstream
-hosted-command approval contract: immutable backend profile, exact command
-and deadline, settled-result provenance, and unknown-on-uncertainty without
-fallback. The App's current audited Core artifact predates that contract.
-The [fixture in App #18](https://github.com/cybergarage/orbit-app/pull/18)
-does not connect it to the Agent. Any later opt-in first needs a reproducible
-Core repin and an App-owned adapter that admits the same image, accepts only
-reviewed fixed operations, enforces the approved workspace and output bounds,
-and verifies cancellation/teardown or preserves an unknown result. No App
-command activation or permission change is part of this verification.
+The only allowed `bash` input is `printf 'workspace command ready\n'` with
+the fixed 12-second outer limit (omit the timeout or pass `12`). The
+[Core #52](https://github.com/cybergarage/orbit/pull/52) approval binds that
+command, the workspace, an immutable Docker image ID, network-off policy and
+bounded output. Other inputs are denied before an approval can be requested.
+The dedicated image has only the fixed probe; it does not read workspace files
+or execute code from them. The workspace bind is read-only and nonrecursive, and
+no App state, credentials, or socket are mounted. An unconfirmed result is
+unknown, never retried or redirected to the host. Restart recovery uses only the
+saved run-owned Docker identity.
+
+### Other fixed workspace command experiments (not connected to the App)
+
+`node --import tsx scripts/workspace-command-docker-smoke.ts` still exercises
+a separate fixture image supporting a constant Bash probe, Git tracked index
+entries, Node syntax validation and one local Node test file. These Git and Node
+operations are not exposed by the Host Agent. No general shell, networked Git,
+dependency installation, linked worktrees, or production builds are added.
+The retained legacy route's existing Bash remains unchanged.

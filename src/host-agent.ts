@@ -10,6 +10,8 @@ import type {
 	Session,
 	ToolResult,
 	WorkspaceExecutor,
+	WorkspaceCommandAdapter,
+	WorkspaceCommandOutcome,
 } from "@cybergarage/orbit";
 import { hostOriginator, hostRepository } from "./host-core";
 import {
@@ -25,6 +27,13 @@ import {
 	executeWorkspaceMutation,
 	executeWorkspaceObservation,
 } from "./workspace-mutation-client";
+
+import {
+	approvedReadiness,
+	readinessInput,
+	readinessProfile,
+	type HostCommandProbe,
+} from "./workspace-readiness";
 
 const readers = ["read", "list", "glob", "grep"] as const;
 type Reader = (typeof readers)[number];
@@ -175,7 +184,7 @@ function projectMemory(
 	return adapter as Service;
 }
 
-/** Runs Core in the host; only explicitly routed file tools are visible. */
+/** Runs Core in the host with only explicitly routed workspace operations. */
 export class HostAgentRun {
 	readonly name = `orbit-app-${randomUUID()}`; // durable executor child ownership
 	readonly workspaceReadsEnabled = true;
@@ -186,6 +195,8 @@ export class HostAgentRun {
 	private running?: Promise<void>;
 	private readerAdmitted = false;
 	private writerAdmitted = false;
+	private readinessAdmitted = false;
+	private readinessUsed = false;
 	private approval?: HostApproval;
 	private readerBlocked = false;
 	private readerTail = Promise.resolve();
@@ -200,6 +211,7 @@ export class HostAgentRun {
 		private request: ProviderRequest,
 		private reader: HostReader = dockerReader,
 		private writer?: HostWriter,
+		private commandProbe?: HostCommandProbe,
 	) {}
 
 	get workspaceMutationsEnabled() {
@@ -209,7 +221,7 @@ export class HostAgentRun {
 	async approve(id: unknown, approve: unknown) {
 		const request = this.approval;
 		if (
-			!this.writer ||
+			(!this.writer && !this.commandProbe) ||
 			!request ||
 			!this.agent ||
 			this.controller.signal.aborted ||
@@ -244,18 +256,79 @@ export class HostAgentRun {
 
 	async confirmGone() {
 		await this.readerTail;
+		if (this.readinessAdmitted) await this.commandProbe?.stop(this.name);
 		if (this.writerAdmitted) await this.writer?.stop(this.name);
 		if (this.readerAdmitted) await this.reader.stop(this.name);
 		await verifySessionWriterReleased(this.core, this.config.sessionId);
+	}
+
+	private readinessAdapter(
+		artifact: string,
+		before: string,
+	): WorkspaceCommandAdapter {
+		const probe = this.commandProbe;
+		if (!probe) throw new Error("Readiness probe is not configured");
+		const profile = readinessProfile(artifact);
+		return {
+			profile,
+			revalidate: async (op, signal) =>
+				!signal.aborted &&
+				!this.controller.signal.aborted &&
+				!this.readinessUsed &&
+				approvedReadiness(op, this.workspace, artifact) &&
+				(await identity(this.workspace)) === before &&
+				(await probe.revalidate(artifact, signal)),
+			execute: async (op, runSignal) => {
+				const signal = AbortSignal.any([runSignal, this.controller.signal]);
+				if (
+					signal.aborted ||
+					this.readinessUsed ||
+					this.readerBlocked ||
+					!approvedReadiness(op, this.workspace, artifact)
+				)
+					return { status: "unknown" };
+				this.readinessUsed = true;
+				const task = this.readerTail.then(
+					async (): Promise<WorkspaceCommandOutcome> => {
+						if (
+							signal.aborted ||
+							this.readerBlocked ||
+							(await identity(this.workspace)) !== before
+						)
+							return { status: "unknown" };
+						return probe.execute(
+							this.name,
+							this.workspace,
+							artifact,
+							op,
+							signal,
+						);
+					},
+				);
+				this.readerTail = task.then(
+					() => {},
+					() => {
+						this.readerBlocked = true;
+					},
+				);
+				return task;
+			},
+		};
 	}
 
 	private fileRunner(
 		image: string,
 		before: string,
 		writerImage?: string,
+		readiness?: WorkspaceCommandAdapter,
 	): WorkspaceExecutor {
 		return {
-			toolNames: writerImage ? [...readers, ...mutations] : readers,
+			toolNames: [
+				...readers,
+				...(writerImage ? mutations : []),
+				...(readiness ? (["bash"] as const) : []),
+			],
+			...(readiness ? { command: readiness } : {}),
 			execute: (op, runSignal) => {
 				if (op.effect === "write")
 					return this.mutate(op, runSignal, before, writerImage);
@@ -338,8 +411,7 @@ export class HostAgentRun {
 		return task;
 	}
 
-	private async run() {
-		const signal = this.controller.signal;
+	private async admitWorkspace(signal: AbortSignal) {
 		const before = await identity(this.workspace);
 		const image = await this.reader.admit();
 		this.readerAdmitted = true;
@@ -352,6 +424,22 @@ export class HostAgentRun {
 				throw new Error("Isolated writer image identity is invalid");
 			this.writerAdmitted = true;
 		}
+		signal.throwIfAborted();
+		const readinessImage = await this.commandProbe?.admit();
+		if (this.commandProbe && !readinessImage)
+			throw new Error("Isolated readiness image identity is invalid");
+		const readiness = readinessImage
+			? this.readinessAdapter(readinessImage, before)
+			: undefined;
+		this.readinessAdmitted = readiness !== undefined;
+		signal.throwIfAborted();
+		return { before, image, writerImage, readinessImage, readiness };
+	}
+
+	private async run() {
+		const signal = this.controller.signal;
+		const { before, image, writerImage, readinessImage, readiness } =
+			await this.admitWorkspace(signal);
 		signal.throwIfAborted();
 		const api = await import("@cybergarage/orbit");
 		const repo = await hostRepository(this.core);
@@ -407,7 +495,11 @@ export class HostAgentRun {
 					provider: this.config.provider,
 					tools: {
 						profile: "none",
-						include: writerImage ? [...readers, ...mutations] : [...readers],
+						include: [
+							...readers,
+							...(writerImage ? mutations : []),
+							...(readiness ? (["bash"] as const) : []),
+						],
 						exclude: [],
 					},
 				},
@@ -428,12 +520,21 @@ export class HostAgentRun {
 						mcpServers: 0,
 					},
 					policy: {
-						generation: writerImage
-							? `orbit-app-host-files-v1:${writerImage}`
-							: "orbit-app-host-readonly-v1",
+						generation: [
+							writerImage
+								? `orbit-app-host-files-v1:${writerImage}`
+								: "orbit-app-host-readonly-v1",
+							...(readinessImage ? [`probe:${readinessImage}`] : []),
+						].join(":"),
 						profile: "workspace-confirm",
 						roots: [this.workspace],
 						decide: (op) => {
+							if (op.effect === "command" && op.name === "bash")
+								return readiness &&
+									!this.readinessUsed &&
+									readinessInput(op.input)
+									? "ask"
+									: "deny";
 							if (op.effect === "write" && writerImage && canMutate(op.name))
 								return "ask";
 							const input = op.input as
@@ -447,8 +548,13 @@ export class HostAgentRun {
 								: "deny";
 						},
 					},
-					workspaceExecutor: this.fileRunner(image, before, writerImage),
-					...(writerImage
+					workspaceExecutor: this.fileRunner(
+						image,
+						before,
+						writerImage,
+						readiness,
+					),
+					...(writerImage || readiness
 						? {
 								responderScope: "desktop-owner",
 								onApproval: (request: HostApproval) => {
@@ -461,7 +567,9 @@ export class HostAgentRun {
 											preview: {
 												...request.preview,
 												execution:
-													"Isolated Docker writer; selected workspace only",
+													typeof request.preview.command === "string"
+														? "Fixed Docker readiness probe; selected workspace read-only; no network"
+														: "Isolated Docker writer; selected workspace only",
 											},
 										},
 									});

@@ -51,6 +51,8 @@ jobs:
         run: ORBIT_APP_TEST_HOST_WRITER_DOCKER=1 node --import tsx --test --test-name-pattern="Docker Host writer" test/host-agent.test.ts
       - name: Verify the experimental fixed workspace command contract
         run: node --import tsx scripts/workspace-command-docker-smoke.ts
+      - name: Verify approved fixed Host Docker readiness probe
+        run: ORBIT_APP_TEST_READINESS_DOCKER=1 node --import tsx --test --test-name-pattern="real Docker Host readiness" test/host-agent.test.ts
       # Host-wide lsof inspection must not race other fixture Docker mounts.
       - run: npm test
       - run: npm run build

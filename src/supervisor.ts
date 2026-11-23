@@ -13,6 +13,10 @@ import {
 	type HostWriter,
 } from "./host-agent";
 import { NativeProjectCatalog } from "./native-catalog";
+import {
+	stopWorkspaceReadiness,
+	type HostCommandProbe,
+} from "./workspace-readiness";
 import { HostCoreNames, acquireHostSources } from "./host-core";
 import { ProjectKnowledge } from "./project-knowledge";
 import { AppInitialization } from "./initialization-host";
@@ -113,6 +117,7 @@ export class Supervisor {
 		private readonly hostAgent = false,
 		private readonly hostReader: HostReader = createDockerHostReader(),
 		private readonly hostWriter?: HostWriter,
+		private readonly hostCommandProbe?: HostCommandProbe,
 	) {
 		this.models = models ?? new CoreModelsHost(!this.hostAgent);
 		this.nativeCatalog = this.hostAgent
@@ -180,6 +185,9 @@ export class Supervisor {
 				? "host-files"
 				: "host-readonly";
 		else delete this.store.state.executionBackend;
+		if (this.hostAgent && this.hostCommandProbe)
+			this.store.state.executionReadinessProbe = true;
+		else delete this.store.state.executionReadinessProbe;
 		await this.reconcile();
 		await this.knowledge.init();
 		this.knowledge.kick();
@@ -199,6 +207,11 @@ export class Supervisor {
 			if (a.runtime === "host-v1") {
 				if (!this.hostAgent || a.containerName)
 					throw new Error("Saved host run belongs to another profile mode");
+				if (a.workspaceReadiness) {
+					if (!a.readerOwner)
+						throw new Error("Saved Host Agent readiness identity is missing");
+					await stopWorkspaceReadiness(a.readerOwner);
+				}
 				if (a.workspaceMutations === true) {
 					if (!a.readerOwner)
 						throw new Error("Saved Host Agent writer identity is missing");
@@ -263,6 +276,15 @@ export class Supervisor {
 		this.saveQueue = this.saveQueue.then(() => this.store.save());
 		await this.saveQueue;
 	}
+	private unavailableRuntimeMessage(): string {
+		if (!this.hostAgent)
+			return "Docker, worker image, and the selected provider must be available. Check status and build the worker image.";
+		if (this.hostCommandProbe)
+			return "Docker, configured standalone images (including the readiness probe), and the selected provider must be available. Check Settings for details.";
+		if (this.hostWriter)
+			return "Docker, the standalone Docker reader and writer, and the selected provider must be available. Check Settings for details.";
+		return "Docker, the standalone Docker reader, and the selected provider must be available. Run npm run worker:reader:build.";
+	}
 	async health(): Promise<Health> {
 		if (this.maintenance)
 			throw new Error("App writers are stopped for initialization");
@@ -285,9 +307,16 @@ export class Supervisor {
 			if (this.hostAgent) {
 				await this.hostReader.admit();
 				await this.hostWriter?.admit();
+				await this.hostCommandProbe?.admit();
 			} else await command(dockerPath, ["image", "inspect", image]);
 			health.image = true;
-			if (this.hostAgent)
+			if (this.hostAgent && this.hostCommandProbe) {
+				health.detail.push(
+					this.hostWriter
+						? "Host Agent: Docker reads, approved file changes, and one approved fixed readiness probe. No general commands."
+						: "Host Agent: Docker reads and one approved fixed readiness probe. No general commands or file changes.",
+				);
+			} else if (this.hostAgent)
 				health.detail.push(
 					this.hostWriter
 						? "Host Agent development profile: Docker read/search and approved file changes; shell is disabled."
@@ -441,13 +470,7 @@ export class Supervisor {
 				!health.image ||
 				(provider === "ollama" && !health.ollama)
 			)
-				throw new Error(
-					this.hostAgent
-						? this.hostWriter
-							? "Docker, the standalone Docker reader and writer, and the selected provider must be available. Check Settings for details."
-							: "Docker, the standalone Docker reader, and the selected provider must be available. Run npm run worker:reader:build."
-						: "Docker, worker image, and the selected provider must be available. Check status and build the worker image.",
-				);
+				throw new Error(this.unavailableRuntimeMessage());
 			await this.validateModel(
 				{ model, provider },
 				p.projectId,
@@ -517,6 +540,7 @@ export class Supervisor {
 							),
 						this.hostReader,
 						this.hostWriter,
+						this.hostCommandProbe,
 					)
 				: this.factory(
 						workspace,
@@ -534,6 +558,8 @@ export class Supervisor {
 			if (this.store.state.active) {
 				if (this.hostAgent) {
 					this.store.state.active.readerOwner = worker.name;
+					if (this.hostCommandProbe)
+						this.store.state.active.workspaceReadiness = true;
 					if (worker.workspaceMutationsEnabled)
 						this.store.state.active.workspaceMutations = true;
 				} else {

@@ -24,7 +24,7 @@ export function workerUserArgs(
 		throw new Error("Linux workers require a non-root host user");
 	return ["--user", `${uid}:${gid}`];
 }
-function dockerIsolationArgs(name: string, label: string) {
+export function dockerIsolationArgs(name: string, label: string) {
 	return [
 		"run",
 		"--rm",
@@ -73,6 +73,15 @@ export function dockerArgs(
 	];
 }
 const workspaceImage = "docker.io/library/orbit-app-workspace:local";
+export function assertWorkspaceMountPath(workspace: string) {
+	if (
+		!path.isAbsolute(workspace) ||
+		path.resolve(workspace) !== workspace ||
+		path.parse(workspace).root === workspace ||
+		/[,\r\n\0]/.test(workspace)
+	)
+		throw new Error("Invalid workspace mount path");
+}
 /** The separate runner never receives the Core state mount. */
 export function dockerWorkspaceArgs(
 	name: string,
@@ -89,13 +98,7 @@ export function dockerWorkspaceArgs(
 		).test(name)
 	)
 		throw new Error("Invalid workspace worker name");
-	if (
-		!path.isAbsolute(workspace) ||
-		path.resolve(workspace) !== workspace ||
-		path.parse(workspace).root === workspace ||
-		/[,\r\n\0]/.test(workspace)
-	)
-		throw new Error("Invalid workspace mount path");
+	assertWorkspaceMountPath(workspace);
 	return [
 		...dockerIsolationArgs(name, "org.cybergarage.orbit-app.role=workspace"),
 		"--mount",
@@ -217,7 +220,7 @@ export async function admitWorkspaceWriterImage(
 	}
 }
 
-async function admitDockerImage(
+export async function admitDockerImage(
 	imageRef: string,
 	label: string,
 	role: string,

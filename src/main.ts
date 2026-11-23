@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Supervisor } from "./supervisor";
 import { openHostAgentProfile, selectHostAgent } from "./host-profile";
 import { createDockerHostWriter } from "./host-agent";
+import { createDockerHostCommandProbe } from "./workspace-readiness";
 // Only the native-addon package enables the default. Source and legacy
 // package builds still support the explicit development opt-in.
 declare const __ORBIT_APP_FRESH_HOST_DEFAULT__: boolean;
@@ -71,9 +72,22 @@ installBackgroundWindows(
 	openWindow,
 	testMode && process.env.ORBIT_APP_KEEPALIVE_TEST !== "1",
 );
+function configuredHostExecutors(enabled: boolean) {
+	if (!enabled) return {};
+	const writer =
+		process.env.ORBIT_APP_HOST_AGENT_FILE_CHANGES === "1"
+			? createDockerHostWriter()
+			: undefined;
+	const readiness =
+		process.env.ORBIT_APP_HOST_AGENT_READINESS_PROBE === "1"
+			? createDockerHostCommandProbe()
+			: undefined;
+	return { writer, readiness };
+}
 async function start() {
 	try {
 		await app.whenReady();
+		const { writer, readiness } = configuredHostExecutors(hostAgent);
 		supervisor = new Supervisor(
 			app.getPath("userData"),
 			(state) => {
@@ -95,9 +109,8 @@ async function start() {
 			undefined,
 			hostAgent,
 			undefined,
-			hostAgent && process.env.ORBIT_APP_HOST_AGENT_FILE_CHANGES === "1"
-				? createDockerHostWriter()
-				: undefined,
+			writer,
+			readiness,
 		);
 		await supervisor.init();
 		nativeTheme.themeSource = supervisor.store.state.appearance ?? "system";

@@ -245,6 +245,7 @@ export function fixtureAppEnv(env, base, port, host, writes = false) {
 		ORBIT_APP_LIVE: "0",
 		ORBIT_APP_HOST_AGENT: host ? "1" : "0",
 		ORBIT_APP_HOST_AGENT_FILE_CHANGES: writes ? "1" : "0",
+		ORBIT_APP_HOST_AGENT_READINESS_PROBE: "0",
 		OPENAI_BASE_URL: `http://127.0.0.1:${port}/v1`,
 		OPENAI_API_KEY: key,
 	};

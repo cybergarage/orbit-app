@@ -2,7 +2,7 @@
 
 These operations are available on the retained legacy route only. Data initialization is not exposed by the native Host Agent.
 
-Orbit App uses the published, exactly pinned `@cybergarage/orbit@0.9.3` maintenance APIs. Electron userData is independent from CLI/embedded GUI `~/.orbit`. Initialization permanently deletes only the reviewed targets: no Trash, backup, staging copy, rollback or secure-erasure promise is provided. The App root itself is never removed.
+Orbit App uses the published, exactly pinned [Orbit Core](../core-pin.json) maintenance APIs. Electron userData is independent from CLI/embedded GUI `~/.orbit`. Initialization permanently deletes only the reviewed targets: no Trash, backup, staging copy, rollback or secure-erasure promise is provided. The App root itself is never removed.
 
 ## Persistence responsibilities and scopes
 

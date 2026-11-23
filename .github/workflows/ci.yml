@@ -16,12 +16,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: app
-      - name: Check out the pinned Core main source
-        uses: actions/checkout@v4
-        with:
-          repository: cybergarage/orbit
-          ref: 210072fb44debfc08398c2b740c2d4008da2eefd
-          path: orbit
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -34,8 +28,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lsof libcap2-bin
           sudo setcap cap_dac_read_search,cap_sys_ptrace+ep /usr/bin/lsof
-      - name: Verify the source pin and audited vendored artifact before installation
-        run: node scripts/prepare-local-core.mjs --verify-source ../orbit
+      - name: Verify the exact Core publication metadata and both locks
+        run: node scripts/verify-core-pin.mjs
       - run: npm ci --ignore-scripts
       # Run only these lock-pinned binary downloaders, not dependency hooks.
       - name: Install the pinned Electron binary
@@ -62,5 +56,10 @@ jobs:
       - run: npm run build
       - run: npx playwright install-deps chromium
       - run: xvfb-run -a npx playwright test
+      - name: Verify the rebuilt worker uses the same Core version
+        run: |
+          host_core_version=$(node -p 'require("./core-pin.json").version')
+          worker_core_version=$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --workdir /opt/worker --entrypoint node orbit-app-worker:project-memory-local -p 'require("./node_modules/@cybergarage/orbit/package.json").version')
+          test "$worker_core_version" = "$host_core_version"
       - name: Offline worker import and shell smoke check
         run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --workdir /opt/worker --entrypoint node orbit-app-worker:project-memory-local --input-type=module -e "import {Agent,ModelCatalog,ModelGateway} from '@cybergarage/orbit'; import {execFileSync} from 'node:child_process'; if([Agent,ModelCatalog,ModelGateway].some(api=>typeof api !== 'function'))process.exit(1); console.log(execFileSync('bash',['-lc','echo worker-ready']).toString());"

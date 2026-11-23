@@ -71,37 +71,11 @@ async function missing(file: string) {
 	await assert.rejects(fs.access(file), { code: "ENOENT" });
 }
 
-test("initialization status is read-only, pinned local versions match and settings need explicit selection", async () => {
-	const pkg = JSON.parse(
-		await fs.readFile(
-			new URL("../worker/package.json", import.meta.url),
-			"utf8",
-		),
+test("initialization status is read-only, pinned Core version matches and settings need explicit selection", async () => {
+	const pin = JSON.parse(
+		await fs.readFile(new URL("../core-pin.json", import.meta.url), "utf8"),
 	);
-	const artifact = JSON.parse(
-		await fs.readFile(
-			new URL("../worker/packages/core-artifact.json", import.meta.url),
-			"utf8",
-		),
-	);
-	assert.equal(initializationAvailability.coreVersion, artifact.version);
-	assert.equal(
-		pkg.dependencies["@cybergarage/orbit"],
-		`file:packages/${artifact.file}`,
-	);
-	const host = JSON.parse(
-		await fs.readFile(new URL("../package-lock.json", import.meta.url), "utf8"),
-	);
-	const worker = JSON.parse(
-		await fs.readFile(
-			new URL("../worker/package-lock.json", import.meta.url),
-			"utf8",
-		),
-	);
-	assert.equal(
-		host.packages["node_modules/@cybergarage/orbit"].integrity,
-		worker.packages["node_modules/@cybergarage/orbit"].integrity,
-	);
+	assert.equal(initializationAvailability.coreVersion, pin.version);
 	assert.equal(initializationAvailability.available, true);
 	const supervisor = new Supervisor("/synthetic/unopened-profile", () => {
 		throw Error("Unexpected publish");

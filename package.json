@@ -23,7 +23,6 @@
     "test:ui": "npm run build && playwright test",
     "test:live": "tsx scripts/live.ts",
     "metadata:recover": "tsx scripts/recover-metadata.ts",
-    "core:prepare": "node scripts/prepare-local-core.mjs",
     "worker:build": "docker build -t orbit-app-worker:project-memory-local worker",
     "worker:reader:build": "docker build -f worker/reader/Dockerfile -t orbit-app-workspace-reader:local worker",
     "worker:workspace:build": "docker build --network=none -t orbit-app-workspace:local worker/workspace",
@@ -31,7 +30,7 @@
     "package:legacy": "npm run build && node scripts/package.mjs"
   },
   "dependencies": {
-    "@cybergarage/orbit": "file:worker/packages/cybergarage-orbit-0.9.3-project-memory.0.tgz",
+    "@cybergarage/orbit": "0.9.4-next.0",
     "@js-temporal/polyfill": "0.5.1",
     "react": "19.2.8",
     "react-dom": "19.2.8"

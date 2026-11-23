@@ -3,6 +3,6 @@
 	"private": true,
 	"type": "module",
 	"dependencies": {
-		"@cybergarage/orbit": "file:packages/cybergarage-orbit-0.9.3-project-memory.0.tgz"
+		"@cybergarage/orbit": "0.9.4-next.0"
 	}
 }

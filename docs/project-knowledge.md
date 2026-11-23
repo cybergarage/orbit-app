@@ -92,14 +92,11 @@ data/all initialization removes the catalog through existing reviewed targets.
 The host stops extraction/helpers before initialization and preserves unknown
 files and workspaces according to existing maintenance rules.
 
-This unpublished integration installs the included audited Core artifact with
-`npm ci`, then `npm run worker:build`. Both host and worker lockfiles pin the
-same local prerelease tarball. Its SHA-256/source commit are recorded in
-`worker/packages/core-artifact.json`; the image tag is
-`orbit-app-worker:project-memory-local`. Other generated tarballs remain ignored.
-Source rebuild is an explicit maintenance operation described below; it is not
-required for fresh-checkout installation. Nothing is publicly released or
-installed into the user's existing app. See the Core guide/ADR for contracts.
+The App and legacy worker install the same exact published Core prerelease.
+[Core pin metadata](../core-pin.json) records the registry artifact, SHA-512
+integrity and source release commit. The development legacy worker image remains
+`orbit-app-worker:project-memory-local`; rebuild it when the pin changes.
+The Host Agent catalog, existing storage pairs and tool modes are unchanged.
 
 ## Validation evidence
 
@@ -165,46 +162,22 @@ limits. Regression evidence: autonomous backlog/retry/resume/budget tests in
 `test/knowledge-faults.test.ts` without explicit kicks, Core natural-correction /
 late-target tests, and restart/switch/partial-edit UI in `test/ui/knowledge.spec.ts`.
 
-## Pull request dependency and clean-checkout reproduction
+## Clean-checkout reproduction
 
-This integration uses Core source commit
-`c257b718623a3a0baa2021110517e719e81105d6` in
-`https://github.com/cybergarage/orbit.git` (including Project knowledge and conversation model selection). It uses no nonexistent
-published version. The exact audited `0.9.3-project-memory.0` tarball is committed
-under `worker/packages/`; its source and SHA-256 are recorded beside it. Both
-lockfiles use this same relative file, so a fresh checkout runs `npm ci` directly,
-then `npm run worker:build` and normal checks, without a local Core checkout.
+Verify the host and worker lockfiles with `node scripts/verify-core-pin.mjs`.
+Install the App with `npm ci --ignore-scripts`, run the documented pinned native
+binary installers where needed, and build the legacy worker with
+`npm run worker:build`. The package resolves through npm's official registry;
+both lockfiles pin the same exact version and SHA-512 integrity. No Core
+source checkout or tarball committed to this repository is required.
 
-CI separately checks out the pinned Core source and verifies that clean revision
-and the included artifact hash before installation. The reviewed artifact has 494
-source/distribution files; inspection found no credential patterns, private
-machine paths, session/database files or user data. It is an intentional package
-dependency, not a backup or public release. SHA-256:
-`288a62406a66c5194ca3014f3161bd9d1cf3b895ea030e3601e443345ddba837`.
+When updating the pin, verify the published version, source tag/commit and
+tarball integrity first, then regenerate both lockfiles from the registry.
+Rebuild the legacy worker, rerun CI and verify the ordinary native package with
+`npm run test:host-package` on macOS arm64. Pin the version, not a moving
+distribution tag.
 
-Source rebuild remains available with `npm run core:prepare -- <path>`
-on an explicitly selected clean macOS/Linux checkout (`/usr/bin/git`). npm supplies
-its absolute CLI path and the script invokes it with the current Node binary; it
-does not search PATH for subprocess executables. The script refuses revision or artifact
-hash changes. The initial Linux/Node22 CI rebuild produced different archive bytes
-than the reviewed M4 artifact; it was not accepted by weakening the hash check.
-Do not assume byte-identical archives across toolchains. Use the included pinned
-artifact, or audit a deliberate rebuild and explicitly update its hash and both
-locks together. No tool switches or rewrites another Core checkout.
-
-Core must be reviewed/merged first. If its merged source differs, explicitly
-update metadata and CI source commits, review/rebuild the package, update the
-reviewed hash and both locks, rebuild the worker and rerun all checks. After a
-separately authorized real Core release, replace both file dependencies with its
-exact real version, regenerate both locks/image and rerun integration/GUI checks
-before making this PR ready. No merge, release or deployment is authorized here.
-
-
-Core PR #19 was merged as `4d880deee0f5d4edbdc831e4ccc17dfb26a91e98`.
-Its source tree matches the pinned source commit above exactly; the included
-artifact and both locks therefore remain unchanged. This is still a vendored
-integration package, not a registry release.
-
+## Historical validation of the vendored integration
 
 ### PR CI follow-up
 

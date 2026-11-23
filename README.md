@@ -33,8 +33,8 @@ legacy route still runs its Agent in the Docker worker.
 
 ```sh
 cd ~/Src/orbit-app
-# The audited local Core tarball is included; no unpublished registry version
-# or machine-specific source checkout is needed for installation.
+# Both lockfiles pin the same published Orbit Core version and integrity.
+# No separate Core checkout or vendored archive is required.
 npm ci
 npm run worker:reader:build
 npm run package
@@ -86,7 +86,7 @@ path for its own Electron addon.
 
 - Home/new-chat, project creation and editing with optional directory/instructions, session rename/move, conversation model selection, runtime health, operation approvals, cancellation, saved history, and top-level artifact listing.
 - Scheduled definitions and a separate execution history with input, answer, operation/approval events and failure/interruption details.
-- Session moves preserve original Orbit storage and working directory. Changing a project directory affects new chats only; project guidance affects future tasks. Running or recovery-pending sessions cannot move. Project/Chat names use Orbit core APIs pinned to the local `0.9.3-project-memory.0` artifact. Unsupported legacy name formats are rejected without data deletion. Supported combined profiles move their registry location without retaining a copy.
+- Session moves preserve original Orbit storage and working directory. Changing a project directory affects new chats only; project guidance affects future tasks. Running or recovery-pending sessions cannot move. Project/Chat names use the pinned Orbit Core APIs. Unsupported legacy name formats are rejected without data deletion. Supported combined profiles move their registry location without retaining a copy.
 - Saved System/Light/Dark appearance and compact Project/Chat navigation, with Settings categories for Appearance and real runtime Status.
 - One-time, fixed-interval and calendar schedules with a saved IANA time zone. Relative first runs start from successful creation; fixed intervals keep their planned anchor, while daily/weekly rules keep local wall time. **The app must be running.** Missed occurrences coalesce; interrupted work is not automatically replayed. There is no background daemon.
 - Scheduled tasks have explicit Enable/Disable and confirmed Delete controls. Enabling retains a future slot or skips elapsed recurring slots while preserving the original interval/calendar anchor and time zone; past or already-admitted one-time slots require editing to a new future time. Editing a disabled task keeps it disabled. Disable/Delete prevent future admission and never cancel an already-admitted run. Delete removes only the definition: execution history, chats and working files remain. Changes persist across restart.
@@ -95,7 +95,7 @@ path for its own Electron addon.
 - Per-file limits and a storage watchdog are **not a hard disk quota**; rapid writes can still consume host disk space.
 - Orbit's pinned `braces@3.0.3` dependency has an unpatched DoS advisory. Restricted search syntax mitigates the direct glob/grep path, but an approved Bash script can still invoke the vulnerable dependency.
 
-See [core-backed names and storage requirements](docs/core-display-names.md) for the 0.9.2 transition and existing-data policy.
+See [core-backed names and storage requirements](docs/core-display-names.md) for the retained legacy metadata route and existing-data policy.
 
 See [approved UI implementation and current validation](docs/approved-ui-implementation.md) for the latest local implementation status.
 
@@ -103,7 +103,7 @@ See [verification and security limitations](docs/verification.md) for tested beh
 
 Chats within each Project and the unassigned Chats group follow accepted user submissions, newest first. Typing, viewing, responses, names and scheduled work do not affect this order. Rejected requests do not move Chats; failures after acceptance keep their position. Order survives restart and project moves. Older Chats without explicit submission ordering retain their relative saved order until their next user submission; historical submissions have no reliable human/schedule origin and are not inferred. Project order is unchanged.
 
-On the legacy route, Settings → Initialization supports settings-only, saved-data, and settings/data/dedicated-cache initialization through the pinned local Orbit Core maintenance API. The Host Agent does not expose these operations. Each flow previews exact App-owned targets, stops and verifies writers, creates a final metadata plan, and requires explicit permanent confirmation and external exclusive-control declarations. Working files, external workspaces, shared context, unknown objects and browser profile data remain outside the allowlist. Incomplete initialization stays offline across restart; success requires restart. See [scope, ownership and failure behavior](docs/initialization-adoption.md).
+On the legacy route, Settings → Initialization supports settings-only, saved-data, and settings/data/dedicated-cache initialization through the pinned Orbit Core maintenance API. The Host Agent does not expose these operations. Each flow previews exact App-owned targets, stops and verifies writers, creates a final metadata plan, and requires explicit permanent confirmation and external exclusive-control declarations. Working files, external workspaces, shared context, unknown objects and browser profile data remain outside the allowlist. Incomplete initialization stays offline across restart; success requires restart. See [scope, ownership and failure behavior](docs/initialization-adoption.md).
 
 Model choices come from Core's credential-aware provider catalog: choose Ollama,
 Claude (Anthropic), or OpenAI together with a compatible available model in one list. Read-only Models
@@ -111,11 +111,13 @@ API verification is not an inference/billing check. Keys stay on the host:
 Electron owns model transport in Host mode, and legacy workers use constrained
 RPC. Settings defaults apply to
 new chats; existing choices and admitted runs remain isolated. No models are downloaded.
-The bundled Core includes ModelCatalog and ModelGateway. Its exact clean source
-commit and artifact hash are recorded in worker/packages/core-artifact.json;
-host and worker locks and the CI source checkout use that same artifact/pin.
-This artifact was reproduced with Node 26.10.0 and npm 11.19.1 on macOS
-arm64; verification on other platforms uses the checked-in bytes.
+The Host Agent and legacy worker pin the published
+`@cybergarage/orbit@0.9.4-next.0` package, not npm's moving `next` tag.
+[Core pin metadata](core-pin.json) records the source release and SHA-512
+integrity verified against both lockfiles. To use the new pin on the legacy route,
+rebuild its image with `npm run worker:build`; the runtime does not pull a
+replacement or modify an installed app. Host Agent tools remain unchanged.
+
 
 ### Host Agent profile selection
 

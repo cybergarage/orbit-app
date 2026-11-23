@@ -3,7 +3,6 @@ LABEL org.cybergarage.orbit-app.workspace-mutations="1" \
       org.cybergarage.orbit-app.workspace-reader="1"
 WORKDIR /opt/worker
 COPY package*.json ./
-COPY packages ./packages
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 # Install only the lock-pinned SQLite binary; do not run arbitrary dependency hooks.
 RUN cd node_modules/better-sqlite3 && node ../prebuild-install/bin.js

@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { packager } from "@electron/packager";
+import { coreName, verifyCorePin } from "./verify-core-pin.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const [mode = "probe", ...flags] = process.argv.slice(2);
@@ -57,6 +58,7 @@ assert.equal(
 	).version,
 	"11.19.1",
 );
+const core = await verifyCorePin(root);
 const lock = await json(path.join(root, "package-lock.json"));
 assert.equal(lock.packages["node_modules/electron"].version, electronVersion);
 assert.equal(
@@ -90,25 +92,8 @@ const scratch = await fs.mkdtemp(
 );
 try {
 	const appRoot = path.join(scratch, "input");
-	const packageRoot = path.join(appRoot, "worker/packages");
-	await fs.mkdir(packageRoot, { recursive: true, mode: 0o700 });
+	await fs.mkdir(appRoot, { mode: 0o700 });
 	const manifest = await json(path.join(root, "package.json"));
-	const packages = path.join(root, "worker/packages");
-	const core = await json(path.join(packages, "core-artifact.json"));
-	assert.match(core.file, /^cybergarage-orbit-[0-9.a-z-]+\.tgz$/);
-	assert.equal(
-		manifest.dependencies["@cybergarage/orbit"],
-		`file:worker/packages/${core.file}`,
-	);
-	assert.equal(
-		await sha256(path.join(packages, core.file)),
-		core.sha256,
-		"Verify the existing pinned Core build input",
-	);
-	await fs.copyFile(
-		path.join(packages, core.file),
-		path.join(packageRoot, core.file),
-	);
 	await fs.copyFile(
 		path.join(root, "package-lock.json"),
 		path.join(appRoot, "package-lock.json"),
@@ -135,6 +120,11 @@ try {
 		[npm, "ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"],
 		appRoot,
 	);
+	const stagedCore = await json(
+		path.join(appRoot, "node_modules", coreName, "package.json"),
+	);
+	assert.equal(stagedCore.name, coreName);
+	assert.equal(stagedCore.version, core.version);
 	const native = path.join(appRoot, "node_modules/better-sqlite3");
 	assert.equal(
 		(await json(path.join(native, "package.json"))).version,

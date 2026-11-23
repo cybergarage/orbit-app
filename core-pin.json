@@ -1,0 +1,10 @@
+{
+	"version": "0.9.4-next.0",
+	"resolved": "https://registry.npmjs.org/@cybergarage/orbit/-/orbit-0.9.4-next.0.tgz",
+	"integrity": "sha512-Av+2QXWYqFWq7o1VyewUSY7ma8xEh0ER5hexPKZvcMi8bIwR5Wa7NmdCvoTBq1qCxRUHAnu9rr+sVZ1y6NuytA==",
+	"source": {
+		"repository": "https://github.com/cybergarage/orbit",
+		"tag": "v0.9.4-next.0",
+		"commit": "8f2cd7d4b2f4e6badc7a3c8571f179c6ca8e816d"
+	}
+}

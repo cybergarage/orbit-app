@@ -72,9 +72,22 @@ installBackgroundWindows(
 	openWindow,
 	testMode && process.env.ORBIT_APP_KEEPALIVE_TEST !== "1",
 );
+function configuredHostExecutors(enabled: boolean) {
+	if (!enabled) return {};
+	const writer =
+		process.env.ORBIT_APP_HOST_AGENT_FILE_CHANGES === "1"
+			? createDockerHostWriter()
+			: undefined;
+	const readiness =
+		process.env.ORBIT_APP_HOST_AGENT_READINESS_PROBE === "1"
+			? createDockerHostCommandProbe()
+			: undefined;
+	return { writer, readiness };
+}
 async function start() {
 	try {
 		await app.whenReady();
+		const { writer, readiness } = configuredHostExecutors(hostAgent);
 		supervisor = new Supervisor(
 			app.getPath("userData"),
 			(state) => {
@@ -96,12 +109,8 @@ async function start() {
 			undefined,
 			hostAgent,
 			undefined,
-			hostAgent && process.env.ORBIT_APP_HOST_AGENT_FILE_CHANGES === "1"
-				? createDockerHostWriter()
-				: undefined,
-			hostAgent && process.env.ORBIT_APP_HOST_AGENT_READINESS_PROBE === "1"
-				? createDockerHostCommandProbe()
-				: undefined,
+			writer,
+			readiness,
 		);
 		await supervisor.init();
 		nativeTheme.themeSource = supervisor.store.state.appearance ?? "system";

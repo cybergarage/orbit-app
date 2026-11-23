@@ -411,8 +411,7 @@ export class HostAgentRun {
 		return task;
 	}
 
-	private async run() {
-		const signal = this.controller.signal;
+	private async admitWorkspace(signal: AbortSignal) {
 		const before = await identity(this.workspace);
 		const image = await this.reader.admit();
 		this.readerAdmitted = true;
@@ -433,6 +432,14 @@ export class HostAgentRun {
 			? this.readinessAdapter(readinessImage, before)
 			: undefined;
 		this.readinessAdmitted = readiness !== undefined;
+		signal.throwIfAborted();
+		return { before, image, writerImage, readinessImage, readiness };
+	}
+
+	private async run() {
+		const signal = this.controller.signal;
+		const { before, image, writerImage, readinessImage, readiness } =
+			await this.admitWorkspace(signal);
 		signal.throwIfAborted();
 		const api = await import("@cybergarage/orbit");
 		const repo = await hostRepository(this.core);

@@ -276,6 +276,15 @@ export class Supervisor {
 		this.saveQueue = this.saveQueue.then(() => this.store.save());
 		await this.saveQueue;
 	}
+	private unavailableRuntimeMessage(): string {
+		if (!this.hostAgent)
+			return "Docker, worker image, and the selected provider must be available. Check status and build the worker image.";
+		if (this.hostCommandProbe)
+			return "Docker, configured standalone images (including the readiness probe), and the selected provider must be available. Check Settings for details.";
+		if (this.hostWriter)
+			return "Docker, the standalone Docker reader and writer, and the selected provider must be available. Check Settings for details.";
+		return "Docker, the standalone Docker reader, and the selected provider must be available. Run npm run worker:reader:build.";
+	}
 	async health(): Promise<Health> {
 		if (this.maintenance)
 			throw new Error("App writers are stopped for initialization");
@@ -461,15 +470,7 @@ export class Supervisor {
 				!health.image ||
 				(provider === "ollama" && !health.ollama)
 			)
-				throw new Error(
-					this.hostAgent
-						? this.hostCommandProbe
-							? "Docker, configured standalone images (including the readiness probe), and the selected provider must be available. Check Settings for details."
-							: this.hostWriter
-								? "Docker, the standalone Docker reader and writer, and the selected provider must be available. Check Settings for details."
-								: "Docker, the standalone Docker reader, and the selected provider must be available. Run npm run worker:reader:build."
-						: "Docker, worker image, and the selected provider must be available. Check status and build the worker image.",
-				);
+				throw new Error(this.unavailableRuntimeMessage());
 			await this.validateModel(
 				{ model, provider },
 				p.projectId,

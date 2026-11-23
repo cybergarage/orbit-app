@@ -8,6 +8,16 @@ import { useState, useEffect, useRef, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import type { Snapshot, EventRecord, Schedule } from "./types";
 import "./ui.css";
+function hostAgentDescription(state: Snapshot): string {
+	const files = state.executionBackend === "host-files";
+	if (state.executionReadinessProbe && files)
+		return "Host Agent preview: Docker read/search, approved file changes, and one approved readiness probe; no general shell.";
+	if (state.executionReadinessProbe)
+		return "Host Agent preview: Docker read/search and one approved readiness probe; no general shell.";
+	if (files)
+		return "Host Agent preview: Docker read/search and approved file changes; no shell.";
+	return "Host Agent preview: only Docker read/search tools are available.";
+}
 function NativeDialog({
 	children,
 	label,
@@ -211,11 +221,7 @@ function App() {
 	const [view, setView] = useState("home");
 	const [debug, setDebug] = useState(false);
 	const hostAgentPreview = state.executionBackend !== undefined;
-	const hostAgentMessage = state.executionReadinessProbe
-		? `Host Agent preview: Docker read/search${state.executionBackend === "host-files" ? ", approved file changes," : ""} and one approved readiness probe; no general shell.`
-		: state.executionBackend === "host-files"
-			? "Host Agent preview: Docker read/search and approved file changes; no shell."
-			: "Host Agent preview: only Docker read/search tools are available.";
+	const hostAgentMessage = hostAgentDescription(state);
 	const [savingName, setSavingName] = useState(false);
 	const [projectId, setProject] = useState("");
 	const [sessionId, setSession] = useState("");

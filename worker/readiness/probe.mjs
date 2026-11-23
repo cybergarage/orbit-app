@@ -4,7 +4,12 @@ import { spawnSync } from "node:child_process";
 // configuration. The App's approved command is exactly the constant below.
 const result = spawnSync(
 	"/bin/bash",
-	["--noprofile", "--norc", "-c", "printf 'workspace command ready\\n'"],
+	[
+		"--noprofile",
+		"--norc",
+		"-c",
+		String.raw`printf 'workspace command ready\n'`,
+	],
 	{
 		cwd: "/workspace",
 		env: { HOME: "/tmp", PATH: "/usr/bin:/bin", LANG: "C.UTF-8", TZ: "UTC" },

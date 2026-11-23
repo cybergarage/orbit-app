@@ -13,7 +13,7 @@ import {
 	workerUserArgs,
 } from "./worker";
 
-export const readinessCommand = "printf 'workspace command ready\\n'";
+export const readinessCommand = String.raw`printf 'workspace command ready\n'`;
 const readyOutput = "workspace command ready\n";
 const timeoutMs = 12_000;
 const ownerLabel = "org.cybergarage.orbit-app.workspace-parent";

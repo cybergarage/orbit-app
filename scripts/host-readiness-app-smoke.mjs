@@ -275,7 +275,7 @@ async function assertProbeTerminated(env, owner, child) {
 	);
 	assert.match(
 		events.find(({ Action }) => Action === "die").Actor.Attributes.exitCode,
-		/^[1-9][0-9]*$/,
+		/^[1-9]\d*$/,
 	);
 	checkGone(env, owner);
 }

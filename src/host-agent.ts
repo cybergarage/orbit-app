@@ -197,6 +197,7 @@ export class HostAgentRun {
 	private writerAdmitted = false;
 	private readinessAdmitted = false;
 	private readinessUsed = false;
+	private dockerCleanupChecked = false;
 	private approval?: HostApproval;
 	private readerBlocked = false;
 	private readerTail = Promise.resolve();
@@ -254,11 +255,19 @@ export class HostAgentRun {
 		await this.running?.catch(() => {});
 	}
 
+	get confirmedDockerCleanup() {
+		return this.dockerCleanupChecked;
+	}
+
 	async confirmGone() {
+		this.dockerCleanupChecked = false;
 		await this.readerTail;
 		if (this.readinessAdmitted) await this.commandProbe?.stop(this.name);
 		if (this.writerAdmitted) await this.writer?.stop(this.name);
-		if (this.readerAdmitted) await this.reader.stop(this.name);
+		if (this.readerAdmitted) {
+			await this.reader.stop(this.name);
+			this.dockerCleanupChecked = true;
+		}
 		await verifySessionWriterReleased(this.core, this.config.sessionId);
 	}
 

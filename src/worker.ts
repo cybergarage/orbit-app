@@ -785,6 +785,14 @@ export async function projectBytes(roots: string[]): Promise<number> {
 	return size;
 }
 
+export class SessionWriterRetainedError extends Error {
+	constructor() {
+		super(
+			"Worker stopped but Orbit writer ownership remains; preserve history and inspect recovery before retry",
+		);
+	}
+}
+
 export async function verifySessionWriterReleased(
 	core: string,
 	sessionId: string,
@@ -808,8 +816,5 @@ export async function verifySessionWriterReleased(
 			}
 		}),
 	);
-	if (retained.some(Boolean))
-		throw new Error(
-			"Worker stopped but Orbit writer ownership remains; preserve history and inspect recovery before retry",
-		);
+	if (retained.some(Boolean)) throw new SessionWriterRetainedError();
 }

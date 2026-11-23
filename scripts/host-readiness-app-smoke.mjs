@@ -50,19 +50,30 @@ function assertNoProbe(env, owner) {
 	checkGone(env, owner);
 }
 
-function assertOneCompletedProbe(env, owner) {
-	const events = probeEvents(env, owner);
-	const actions = events.map((event) => event.Action);
-	assert.deepEqual(
-		actions.filter((action) =>
-			["create", "start", "die", "destroy"].includes(action),
-		),
-		["create", "start", "die", "destroy"],
-	);
-	assert.equal(new Set(events.map((event) => event.Actor.ID)).size, 1);
+async function settledProbeEvents(env, owner) {
+	const lifecycle = ["create", "start", "die", "destroy"];
+	// Teardown and event delivery run separately in the Docker daemon.
+	let events = [];
+	await expect
+		.poll(
+			() => {
+				events = probeEvents(env, owner);
+				return events
+					.map(({ Action }) => Action)
+					.filter((action) => lifecycle.includes(action));
+			},
+			{ timeout: 5_000 },
+		)
+		.toEqual(lifecycle);
+	return events;
+}
+
+async function assertOneCompletedProbe(env, owner) {
+	const events = await settledProbeEvents(env, owner);
+	assert.equal(new Set(events.map(({ Actor }) => Actor.ID)).size, 1);
 	assert.match(events[0].Actor.ID, /^[a-f0-9]{64}$/);
 	assert.equal(
-		events.find((event) => event.Action === "die").Actor.Attributes.exitCode,
+		events.find(({ Action }) => Action === "die").Actor.Attributes.exitCode,
 		"0",
 	);
 	checkGone(env, owner);
@@ -172,7 +183,7 @@ async function exerciseDecision(page, provider, env, base, imageId, approve) {
 	assert.ok(result, "The real tool result must reach the synthetic model");
 	if (approve) {
 		assert.match(result.content, /workspace command ready/);
-		assertOneCompletedProbe(env, owner);
+		await assertOneCompletedProbe(env, owner);
 	} else {
 		assert.match(result.content, /Operation denied/);
 		assertNoProbe(env, owner);
@@ -255,20 +266,7 @@ async function waitProbeRunning(env, owner) {
 }
 
 async function assertProbeTerminated(env, owner, child) {
-	const lifecycle = ["create", "start", "die", "destroy"];
-	// Container teardown and event delivery run separately in the daemon.
-	let events = [];
-	await expect
-		.poll(
-			() => {
-				events = probeEvents(env, owner);
-				return events
-					.map(({ Action }) => Action)
-					.filter((action) => lifecycle.includes(action));
-			},
-			{ timeout: 5_000 },
-		)
-		.toEqual(lifecycle);
+	const events = await settledProbeEvents(env, owner);
 	assert.deepEqual(
 		new Set(events.map(({ Actor }) => Actor.ID)),
 		new Set([child]),
@@ -328,6 +326,8 @@ async function exerciseCancellation(
 		await waitIdle(page);
 		const session = await chat.session();
 		assert.equal(session.status, "cancelled");
+		assert.equal((await snapshot(page)).recoveryBlockReason, undefined);
+		await expect(page.locator(".recovery-notice")).toBeHidden();
 		assert.ok(!session.answer);
 		assertNoProbe(env, owner);
 	}
@@ -341,12 +341,36 @@ async function exerciseCancellation(
 async function assertRetainedRecovery(page, chat, owner) {
 	const state = await snapshot(page);
 	assert.equal(state.recoveryBlocked, true);
+	assert.equal(state.recoveryBlockReason, "host-writer-retained");
 	assert.equal(state.active.readerOwner, owner);
 	assert.equal(state.active.workspaceReadiness, true);
 	const session = await chat.session(page);
 	assert.equal(session.status, "recovery-blocked");
 	assert.ok(!session.answer);
 	await assert.rejects(chat.submit(page), /already active|recovery is blocked/);
+	await page.getByRole("button", { name: session.name, exact: true }).click();
+	const notice = page.locator(".recovery-notice");
+	await expect(notice).toContainText("The Docker worker has stopped");
+	await expect(notice).toContainText("new runs are blocked");
+	await expect(notice).toContainText("Your chat is saved");
+	await expect(
+		page.getByText("Ask approval for the fixed synthetic readiness check.", {
+			exact: true,
+		}),
+	).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "Stop worker", exact: true }),
+	).toBeHidden();
+	await expect(
+		page.getByRole("button", { name: /^(Run|Retry) task/ }),
+	).toBeHidden();
+
+	await page.getByRole("button", { name: /Runtime ·/ }).click();
+	await expect(notice).toContainText(
+		"Reconnecting Docker alone will not clear",
+	);
+	await page.getByRole("button", { name: "Back to Home", exact: true }).click();
+	await page.getByRole("button", { name: session.name, exact: true }).click();
 }
 
 async function exerciseRestart(

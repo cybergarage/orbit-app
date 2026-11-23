@@ -5,11 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Store, identifier } from "../src/store";
+import type { Snapshot } from "../src/types";
 import {
 	dockerArgs,
 	workerUserArgs,
 	modelRequest,
 	Worker,
+	SessionWriterRetainedError,
 	verifySessionWriterReleased,
 } from "../src/worker";
 import { Supervisor as ProductionSupervisor } from "../src/supervisor";
@@ -519,9 +521,53 @@ test("leftover Orbit writer evidence blocks recovery and is never deleted", asyn
 	await fs.writeFile(file, bytes);
 	await assert.rejects(
 		verifySessionWriterReleased(core, id),
-		/writer ownership remains/,
+		(error) =>
+			error instanceof SessionWriterRetainedError &&
+			/writer ownership remains/.test(error.message),
 	);
 	assert.equal(await fs.readFile(file, "utf8"), bytes);
+});
+
+test("unverified recovery does not trust a persisted Host Docker cleanup claim", async () => {
+	let state: Snapshot | undefined;
+	const sup = new Supervisor(await directory(), (snapshot) => {
+		state = snapshot;
+	});
+	await sup.init();
+	try {
+		const projectId = randomUUID();
+		const sessionId = randomUUID();
+		sup.store.state.projects = [
+			{
+				id: projectId,
+				name: "Synthetic recovery project",
+				sessions: [
+					{
+						id: sessionId,
+						name: "Synthetic chat",
+						events: [],
+						status: "interrupted",
+					},
+				],
+			},
+		];
+		sup.store.state.active = {
+			runtime: "host-v1",
+			readerOwner: `orbit-app-${randomUUID()}`,
+			projectId,
+			sessionId,
+		};
+		sup.store.state.recoveryBlockReason = "host-writer-retained";
+		// The current mode does not own this saved run. No Docker cleanup may be claimed.
+		await sup.reconcile();
+		assert.ok(state);
+		assert.equal(state.recoveryBlocked, true);
+		assert.equal(state.recoveryBlockReason, undefined);
+		assert.equal(state.projects[0].sessions[0].status, "recovery-blocked");
+		assert.equal(state.active?.sessionId, sessionId);
+	} finally {
+		await sup.close();
+	}
 });
 
 test("late model RPC after stop receives cancellation rather than hanging the worker", async () => {

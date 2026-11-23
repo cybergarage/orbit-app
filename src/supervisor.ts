@@ -32,6 +32,7 @@ import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { Store, text, identifier, assertAppProfileRoot } from "./store";
 import {
+	SessionWriterRetainedError,
 	stopWorkerWorkspaceMutation,
 	Worker,
 	command,
@@ -85,6 +86,7 @@ export class Supervisor {
 	private epoch = 0;
 	private closed = false;
 	private recoveryBlocked = false;
+	private recoveryBlockReason?: Snapshot["recoveryBlockReason"];
 	private reconciling?: Promise<void>;
 	private saveQueue = Promise.resolve();
 	private readonly modelSelectionVersions = new Map<string, number>();
@@ -261,18 +263,42 @@ export class Supervisor {
 			this.store.session(a.projectId, a.sessionId).status = "interrupted";
 			if (this.store.state.active === a) delete this.store.state.active;
 			this.recoveryBlocked = false;
+			this.recoveryBlockReason = undefined;
 			await this.publish();
-		} catch {
-			this.store.session(a.projectId, a.sessionId).status = "recovery-blocked";
+		} catch (error) {
+			this.blockRecovery(
+				this.store.session(a.projectId, a.sessionId),
+				error,
+				a.runtime === "host-v1" && Boolean(a.readerOwner),
+			);
 			await this.publish();
-			/* Keep durable identity and block new work until Docker recovers. */
+			// Keep durable identity and block new work until recovery is verified.
 		}
+	}
+	private blockRecovery(
+		session: DesktopSession,
+		error: unknown,
+		dockerChecked: boolean,
+	) {
+		this.recoveryBlocked = true;
+		this.recoveryBlockReason =
+			dockerChecked && error instanceof SessionWriterRetainedError
+				? "host-writer-retained"
+				: undefined;
+		session.status = "recovery-blocked";
+	}
+	private snapshot() {
+		const state = structuredClone(this.store.state);
+		if (this.recoveryBlockReason)
+			state.recoveryBlockReason = this.recoveryBlockReason;
+		else delete state.recoveryBlockReason;
+		return state;
 	}
 	async publish() {
 		if (this.storageStopped)
 			throw new Error("App storage is closed for initialization");
 		this.store.state.recoveryBlocked = this.recoveryBlocked;
-		this.changed(structuredClone(this.store.state));
+		this.changed(this.snapshot());
 		this.saveQueue = this.saveQueue.then(() => this.store.save());
 		await this.saveQueue;
 	}
@@ -600,9 +626,12 @@ export class Supervisor {
 							] === worker.name
 						)
 							delete this.store.state.active;
-					} catch {
-						this.recoveryBlocked = true;
-						session.status = "recovery-blocked";
+					} catch (error) {
+						this.blockRecovery(
+							session,
+							error,
+							worker instanceof HostAgentRun && worker.confirmedDockerCleanup,
+						);
 					}
 					if (execution) {
 						execution.status = session.status;
@@ -635,9 +664,12 @@ export class Supervisor {
 							await worker.confirmGone();
 							if (this.store.state.active === owned)
 								delete this.store.state.active;
-						} catch {
-							this.recoveryBlocked = true;
-							session.status = "recovery-blocked";
+						} catch (error) {
+							this.blockRecovery(
+								session,
+								error,
+								worker instanceof HostAgentRun && worker.confirmedDockerCleanup,
+							);
 						}
 					} else if (this.store.state.active === owned)
 						delete this.store.state.active;
@@ -783,7 +815,7 @@ export class Supervisor {
 				error: this.maintenanceError,
 				complete: this.initialization.completed,
 			};
-			this.changed(structuredClone(this.store.state));
+			this.changed(this.snapshot());
 		}
 	}
 	dispatch(commandName: string, p: any = {}): Promise<any> {
@@ -839,8 +871,7 @@ export class Supervisor {
 			return operation;
 		}
 		if (this.maintenance) {
-			if (commandName === "snapshot")
-				return Promise.resolve(structuredClone(this.store.state));
+			if (commandName === "snapshot") return Promise.resolve(this.snapshot());
 			return Promise.reject(
 				new Error(
 					"App writers are stopped for initialization; review or restart after completion",
@@ -867,7 +898,7 @@ export class Supervisor {
 				return this.tickOnce(p.now);
 			case "snapshot":
 				await this.store.refreshNames();
-				return structuredClone(this.store.state);
+				return this.snapshot();
 			case "model-catalog":
 				return this.catalog(p.projectId, p.refresh === true, p.sessionId);
 			case "health":
@@ -902,7 +933,7 @@ export class Supervisor {
 					await this.publish();
 				} catch (error) {
 					this.store.state.defaultModel = previous;
-					this.changed(structuredClone(this.store.state));
+					this.changed(this.snapshot());
 					throw error;
 				}
 				return this.store.state.defaultModel;
@@ -941,7 +972,7 @@ export class Supervisor {
 				} catch (error) {
 					session.model = previous.model;
 					session.provider = previous.provider;
-					this.changed(structuredClone(this.store.state));
+					this.changed(this.snapshot());
 					throw error;
 				}
 				return session;

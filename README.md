@@ -148,8 +148,14 @@ to build the ordinary package in a disposable location and verify fresh
 default/no fallback, explicit legacy switch-back, approved file changes, and
 the opt-in fixed readiness probe in one run. The packaged renderer shows the
 bound command preview; denial does not launch the probe, while approval
-executes and removes one owned Docker container. It uses Docker and loopback
-models only. The reader, writer, readiness and legacy worker tags must be
+executes and removes one owned Docker container. The same run verifies that
+stopping before approval does not launch a probe, stopping a running probe
+cleans it up, restarting with the opt-in off reaps the interrupted probe
+without replay, and a missing image is reported before inference or fallback.
+Docker cleanup does not establish the outcome of a dispatched command: Core
+can retain its writer and the App stays recovery-blocked rather than accepting
+a new run. This check does not implement Core recovery. It uses Docker and
+loopback models only. The reader, writer, readiness and legacy worker tags must be
 unused; existing tags are never replaced. For
 just the fresh-default smoke, use `npm run test:host-default`. The Linux CI
 job exercises the Docker and application fixtures, not native macOS packaging.

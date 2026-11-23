@@ -19,6 +19,14 @@ import {
 import { openHostAgentProfile } from "../src/host-profile";
 import { encodeWorkspaceRequest } from "../src/workspace-request";
 
+import {
+	createDockerHostCommandProbe,
+	readinessCommand,
+	readinessProfile,
+	stopWorkspaceReadiness,
+	type HostCommandProbe,
+} from "../src/workspace-readiness";
+
 async function fixture(t: import("node:test").TestContext) {
 	const base = await fs.realpath(
 		await fs.mkdtemp(path.join(os.tmpdir(), "orbit-host-fixture-")),
@@ -211,6 +219,311 @@ test("real Core runs on the host with exactly four Docker read tools; merged set
 	} finally {
 		await lease.release();
 	}
+});
+
+async function hostReadinessScenario(
+	t: import("node:test").TestContext,
+	probe: HostCommandProbe,
+	mode: "approve" | "deny" | "drift",
+) {
+	const f = await fixture(t);
+	const approvals: Array<Record<string, unknown>> = [];
+	const replies: Promise<unknown>[] = [];
+	const requests: any[] = [];
+	const events: any[] = [];
+	const artifact = await probe.admit();
+	const run = new HostAgentRun(
+		f.workspace,
+		f.core,
+		{
+			sessionId: f.sessionId,
+			requestId: randomUUID(),
+			model: "gpt-4o",
+			provider: "openai",
+			prompt: "Synthetic fixed readiness probe only.",
+		},
+		(event) => {
+			events.push(event);
+			if (event.type === "approval") {
+				const data = event.data as Record<string, unknown>;
+				approvals.push(data);
+				replies.push(run.approve(data.id, mode !== "deny"));
+			}
+		},
+		async (_route, body) => {
+			requests.push(body);
+			if (requests.length === 1)
+				return completion("bash", {
+					command: "printf 'different harmless text'",
+				});
+			if (
+				requests.length === 2 ||
+				(requests.length === 3 && mode === "approve")
+			)
+				return completion("bash", { command: readinessCommand });
+			return completion();
+		},
+		{
+			admit: async () => `sha256:${"c".repeat(64)}`,
+			read: async () => assert.fail("No reader was requested"),
+			stop: async () => {},
+		},
+		undefined,
+		probe,
+	);
+	await run.start();
+	await Promise.all(replies);
+	await run.confirmGone();
+	assert.deepEqual(
+		requests[0].tools.map((tool: any) => tool.function.name).sort(),
+		["bash", "glob", "grep", "list", "read"],
+	);
+	assert.equal(approvals.length, 1);
+	const preview = approvals[0].preview as any;
+	assert.equal(preview.command, readinessCommand);
+	assert.equal(preview.cwd, f.workspace);
+	assert.equal(preview.timeoutSeconds, 12);
+	assert.equal(preview.commandProfile.revision, artifact);
+	assert.equal(preview.commandProfile.network, "none");
+	assert.equal(preview.commandProfile.workspace, "read-only");
+	assert.match(preview.execution, /fixed Docker readiness probe/i);
+	assert.deepEqual(await fs.readdir(f.workspace), []);
+	if (mode === "approve") {
+		assert.match(JSON.stringify(requests[2]), /workspace command ready/);
+		assert.equal(
+			events.find((e) => e.type === "result")?.data?.runtime?.outcome,
+			"completed",
+		);
+	}
+}
+
+test("Host Core asks only for the exact readiness probe; denial and post-approval rejection never dispatch", async (t) => {
+	const image = `sha256:${"d".repeat(64)}`;
+	for (const mode of ["approve", "deny", "drift"] as const) {
+		let executions = 0;
+		await hostReadinessScenario(
+			t,
+			{
+				admit: async () => image,
+				revalidate: async (selected) => selected === image && mode !== "drift",
+				execute: async () => {
+					executions++;
+					return {
+						status: "exited",
+						exitCode: 0,
+						stdout: "workspace command ready\n",
+						stderr: "",
+						text: "workspace command ready",
+					};
+				},
+				stop: async () => {},
+			},
+			mode,
+		);
+		assert.equal(executions, mode === "approve" ? 1 : 0);
+	}
+});
+
+test("real Docker Host readiness uses the approved immutable image and reaps its fixed probe", {
+	skip: process.env.ORBIT_APP_TEST_READINESS_DOCKER !== "1",
+}, async (t) => {
+	const tag = `orbit-app-readiness-test:${randomUUID()}`;
+	t.after(() => command(dockerPath, ["image", "rm", tag]).catch(() => {}));
+	await command(
+		dockerPath,
+		["build", "--network", "none", "--tag", tag, "worker/readiness"],
+		120_000,
+	);
+	const probe = createDockerHostCommandProbe(tag);
+	const parents: string[] = [];
+	await hostReadinessScenario(
+		t,
+		{
+			...probe,
+			execute: (...args) => {
+				parents.push(args[0]);
+				return probe.execute(...args);
+			},
+		},
+		"approve",
+	);
+	assert.equal(parents.length, 1);
+	const id = parents[0].replace(/^orbit-app-/, "");
+	const alive = await command(dockerPath, [
+		"ps",
+		"-a",
+		"--filter",
+		`name=^/orbit-app-workspace-${id}-probe$`,
+		"--format",
+		"{{.ID}}",
+	]);
+	assert.equal(alive.trim(), "");
+});
+
+test("fixed readiness transport rejects changed bindings and never removes a foreign container", async () => {
+	const revision = `sha256:${"d".repeat(64)}`;
+	const parent = `orbit-app-${randomUUID()}`;
+	const workspace = path.resolve(os.tmpdir(), "synthetic-workspace");
+	const profile = readinessProfile(revision);
+	const op = {
+		name: "bash",
+		effect: "command",
+		version: 1,
+		cwd: workspace,
+		target: workspace,
+		timeoutMs: profile.timeoutMs,
+		profile,
+		input: { command: readinessCommand, timeoutSeconds: 12 },
+	} as const;
+	const id = "a".repeat(64);
+	const calls: string[][] = [];
+	const transport = async (_exe: string, args: string[]) => {
+		calls.push(args);
+		if (args[0] === "ps") return id;
+		if (args[0] === "inspect") return `orbit-app-${randomUUID()}`;
+		return assert.fail("A foreign container must not be removed");
+	};
+	let invocations = 0;
+	const probe = createDockerHostCommandProbe(
+		"unused",
+		transport,
+		async (_exe, args) => {
+			invocations++;
+			assert.ok(args.includes("--pull=never"));
+			assert.ok(args.includes("none"));
+			assert.ok(args.includes("--read-only"));
+			assert.deepEqual(
+				args.filter((a) => a.startsWith("type=bind,src=")),
+				[
+					`type=bind,src=${workspace},dst=/workspace,readonly,bind-recursive=disabled`,
+				],
+			);
+			assert.deepEqual(args.slice(-2), [revision, "/opt/orbit-readiness.mjs"]);
+			return JSON.stringify({
+				exitCode: 0,
+				stdout: "workspace command ready\n",
+			});
+		},
+	);
+	const signal = new AbortController().signal;
+	assert.deepEqual(
+		await probe.execute(
+			parent,
+			workspace,
+			revision,
+			{
+				...op,
+				input: { ...op.input, command: "printf 'different harmless text'" },
+			},
+			signal,
+		),
+		{ status: "unknown" },
+	);
+	assert.deepEqual(
+		await probe.execute(parent, workspace, revision, op, AbortSignal.abort()),
+		{ status: "unknown" },
+	);
+	assert.equal(invocations, 0);
+	await assert.rejects(
+		probe.execute(parent, workspace, revision, op, signal),
+		/ownership mismatch/,
+	);
+	assert.equal(invocations, 1);
+	assert.deepEqual(
+		calls.map((args) => args[0]),
+		["ps", "inspect"],
+	);
+	await assert.rejects(
+		stopWorkspaceReadiness("invalid-owner", transport),
+		/Invalid readiness owner/,
+	);
+});
+
+test("real Docker Host readiness cancellation stops its owned child without replay", {
+	skip: process.env.ORBIT_APP_TEST_READINESS_DOCKER !== "1",
+}, async (t) => {
+	const root = await fs.realpath(
+		await fs.mkdtemp(path.join(os.tmpdir(), "orbit-readiness-cancel-")),
+	);
+	const context = path.join(root, "image");
+	const workspace = path.join(root, "workspace");
+	await fs.mkdir(context);
+	await fs.mkdir(workspace);
+	const tag = `orbit-app-readiness-cancel-test:${randomUUID()}`;
+	const parent = `orbit-app-${randomUUID()}`;
+	t.after(async () => {
+		await stopWorkspaceReadiness(parent).catch(() => {});
+		await command(dockerPath, ["image", "rm", tag]).catch(() => {});
+		await fs.rm(root, { recursive: true, force: true });
+	});
+	// Only this synthetic test image delays. Production never runs project code.
+	await fs.writeFile(
+		path.join(context, "Dockerfile"),
+		[
+			"FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c",
+			'LABEL org.cybergarage.orbit-app.workspace-readiness="1"',
+			"COPY fixture.mjs /opt/orbit-readiness.mjs",
+			"USER node",
+			"",
+		].join("\n"),
+	);
+	await fs.writeFile(
+		path.join(context, "fixture.mjs"),
+		"setTimeout(() => {}, 20000);\n",
+	);
+	await command(
+		dockerPath,
+		["build", "--network", "none", "--tag", tag, context],
+		120_000,
+	);
+	const probe = createDockerHostCommandProbe(tag);
+	const revision = await probe.admit();
+	const profile = readinessProfile(revision);
+	const controller = new AbortController();
+	const owned = parent.replace(/^orbit-app-/, "");
+	const running = () =>
+		command(
+			dockerPath,
+			[
+				"ps",
+				"--filter",
+				`name=^/orbit-app-workspace-${owned}-probe$`,
+				"--format",
+				"{{.ID}}",
+			],
+			1000,
+		);
+	const pending = probe.execute(
+		parent,
+		workspace,
+		revision,
+		{
+			name: "bash",
+			effect: "command",
+			version: 1,
+			cwd: workspace,
+			target: workspace,
+			timeoutMs: profile.timeoutMs,
+			profile,
+			input: { command: readinessCommand, timeoutSeconds: 12 },
+		},
+		controller.signal,
+	);
+	try {
+		const deadline = performance.now() + 3500;
+		while (!(await running()).trim()) {
+			assert.ok(
+				performance.now() < deadline,
+				"The synthetic child did not start",
+			);
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+	} finally {
+		controller.abort();
+	}
+	assert.deepEqual(await pending, { status: "unknown" });
+	assert.equal((await running()).trim(), "");
+	assert.deepEqual(await fs.readdir(workspace), []);
 });
 
 test("stale or missing Docker backend fails before any model or host file operation", async (t) => {

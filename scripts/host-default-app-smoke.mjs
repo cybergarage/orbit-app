@@ -60,6 +60,7 @@ export async function verifyPackagedHostDefault(
 			else result.ORBIT_APP_HOST_AGENT = override;
 			// Do not affirm or deny a write opt-in: verify its absent default.
 			delete result.ORBIT_APP_HOST_AGENT_FILE_CHANGES;
+			delete result.ORBIT_APP_HOST_AGENT_READINESS_PROBE;
 			return result;
 		};
 		const launch = (profile, override) =>

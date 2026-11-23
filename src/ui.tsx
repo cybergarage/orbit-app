@@ -211,8 +211,9 @@ function App() {
 	const [view, setView] = useState("home");
 	const [debug, setDebug] = useState(false);
 	const hostAgentPreview = state.executionBackend !== undefined;
-	const hostAgentMessage =
-		state.executionBackend === "host-files"
+	const hostAgentMessage = state.executionReadinessProbe
+		? `Host Agent preview: Docker read/search${state.executionBackend === "host-files" ? ", approved file changes," : ""} and one approved readiness probe; no general shell.`
+		: state.executionBackend === "host-files"
 			? "Host Agent preview: Docker read/search and approved file changes; no shell."
 			: "Host Agent preview: only Docker read/search tools are available.";
 	const [savingName, setSavingName] = useState(false);

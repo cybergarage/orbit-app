@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Supervisor } from "./supervisor";
 import { openHostAgentProfile, selectHostAgent } from "./host-profile";
 import { createDockerHostWriter } from "./host-agent";
+import { createDockerHostCommandProbe } from "./workspace-readiness";
 // Only the native-addon package enables the default. Source and legacy
 // package builds still support the explicit development opt-in.
 declare const __ORBIT_APP_FRESH_HOST_DEFAULT__: boolean;
@@ -97,6 +98,9 @@ async function start() {
 			undefined,
 			hostAgent && process.env.ORBIT_APP_HOST_AGENT_FILE_CHANGES === "1"
 				? createDockerHostWriter()
+				: undefined,
+			hostAgent && process.env.ORBIT_APP_HOST_AGENT_READINESS_PROBE === "1"
+				? createDockerHostCommandProbe()
 				: undefined,
 		);
 		await supervisor.init();

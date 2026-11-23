@@ -86,7 +86,7 @@ export class Supervisor {
 	private epoch = 0;
 	private closed = false;
 	private recoveryBlocked = false;
-	private recoveryBlockReason?: Snapshot["recoveryBlockReason"];
+	private recoveryBlockReason: Snapshot["recoveryBlockReason"];
 	private reconciling?: Promise<void>;
 	private saveQueue = Promise.resolve();
 	private readonly modelSelectionVersions = new Map<string, number>();

@@ -278,6 +278,14 @@ main {
 	padding: 18px;
 	text-align: left;
 }
+.recovery-notice {
+	display: block;
+	margin-bottom: 12px;
+	padding: 12px;
+	background: var(--selected);
+	border: 1px solid var(--panel-border);
+	border-radius: 8px;
+}
 .composer textarea {
 	width: 100%;
 	padding: 0;

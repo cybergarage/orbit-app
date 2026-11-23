@@ -18,6 +18,19 @@ function hostAgentDescription(state: Snapshot): string {
 		return "Host Agent preview: Docker read/search and approved file changes; no shell.";
 	return "Host Agent preview: only Docker read/search tools are available.";
 }
+function confirmedHostRecovery(state: Snapshot) {
+	return (
+		state.recoveryBlocked &&
+		state.recoveryBlockReason === "host-writer-retained"
+	);
+}
+function RecoveryNotice({ state }: Readonly<{ state: Snapshot }>) {
+	if (!state.recoveryBlocked) return null;
+	const message = confirmedHostRecovery(state)
+		? "The Docker worker has stopped. Orbit is still protecting the session, so new runs are blocked. Your chat is saved. Use Debug to review the last run before recovery. Reconnecting Docker alone will not clear this protection."
+		: "Orbit could not confirm recovery of the previous worker. If Docker is disconnected, reconnect it and choose Recheck in Status before starting or moving a chat.";
+	return <output className="recovery-notice">{message}</output>;
+}
 function NativeDialog({
 	children,
 	label,
@@ -305,6 +318,7 @@ function App() {
 			? (session.provider ?? "ollama")
 			: (state.defaultModel?.provider ?? "ollama"));
 	const active = !!state.active;
+	const cleanedUp = confirmedHostRecovery(state);
 	const pending =
 		session?.status === "awaiting-approval" &&
 		state.active?.sessionId === session.id
@@ -442,6 +456,7 @@ function App() {
 						Model change saved · Applies to the next turn
 					</small>
 				)}
+			{cleanedUp && <RecoveryNotice state={state} />}
 			<textarea
 				aria-label="Task"
 				value={taskInput}
@@ -452,7 +467,7 @@ function App() {
 			<div>
 				<ModelSelector
 					key={sessionId || "draft"}
-					disabled={busy}
+					disabled={busy || cleanedUp}
 					value={{ model: selectedModel, provider: selectedProvider }}
 					load={(refresh) =>
 						window.orbit.call("model-catalog", {
@@ -475,7 +490,7 @@ function App() {
 						}
 					}}
 				/>
-				{active || busy ? (
+				{!cleanedUp && (active || busy) && (
 					<button
 						type="button"
 						className="stop"
@@ -483,7 +498,8 @@ function App() {
 					>
 						Stop worker
 					</button>
-				) : (
+				)}
+				{!cleanedUp && !active && !busy && (
 					<button
 						type="button"
 						className="primary"
@@ -650,12 +666,7 @@ function App() {
 							<p>{detail}</p>
 						</div>
 					))}
-					{state.recoveryBlocked && (
-						<output className="error">
-							Previous worker recovery is pending. Reconnect Docker before
-							starting or moving this chat.
-						</output>
-					)}
+					<RecoveryNotice state={state} />
 					{state.health?.detail.map((d) => (
 						<pre key={d}>{d}</pre>
 					))}

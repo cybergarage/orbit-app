@@ -94,6 +94,8 @@ export interface Snapshot {
 	};
 	health?: Health;
 	recoveryBlocked?: boolean;
+	/** A fresh host observation, not persisted recovery authority. */
+	recoveryBlockReason?: "host-writer-retained";
 }
 export interface Health {
 	catalog?: ProviderCatalog;

@@ -154,10 +154,12 @@ cleans it up, restarting with the opt-in off reaps the interrupted probe
 without replay, and a missing image is reported before inference or fallback.
 Docker cleanup does not establish the outcome of a dispatched command: Core
 can retain its writer and the App stays recovery-blocked rather than accepting
-a new run. This check does not implement Core recovery. It uses Docker and
-loopback models only. The reader, writer, readiness and legacy worker tags must be
-unused; existing tags are never replaced. For
-just the fresh-default smoke, use `npm run test:host-default`. The Linux CI
+a new run. The conversation and Status explain verified Docker teardown
+separately from Core's protection. The App preserves the chat and does not
+unlock, replay, or fall back. The smoke uses Docker and loopback models only.
+The reader, writer, readiness and legacy worker tags must be unused; existing
+tags are never replaced. For just the fresh-default smoke, use
+`npm run test:host-default`. The Linux CI
 job exercises the Docker and application fixtures, not native macOS packaging.
 
 See [Host Agent and legacy profile adoption](docs/host-agent-adoption.md)

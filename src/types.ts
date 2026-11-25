@@ -71,6 +71,20 @@ export interface Execution {
 	answer?: string;
 	events: EventRecord[];
 }
+export interface HostRecoveryIdentity {
+	version: 1;
+	orbitRunId: string;
+	storagePairId: string;
+	executorOwner: string;
+	readerImage: string;
+	writerImage?: string;
+	readinessImage?: string;
+}
+export interface HostApprovalAttempt {
+	operationId: string;
+	approvalId: string;
+	digest: string;
+}
 export interface Snapshot {
 	defaultModel?: { model: string; provider: string };
 	maintenance?: { error?: string; complete: boolean };
@@ -88,6 +102,8 @@ export interface Snapshot {
 		containerName?: string;
 		runtime?: "host-v1";
 		readerOwner?: string;
+		hostRecovery?: HostRecoveryIdentity;
+		hostApprovalAttempts?: HostApprovalAttempt[];
 		workspaceMutations?: boolean;
 		workspaceReads?: boolean;
 		workspaceReadiness?: boolean;

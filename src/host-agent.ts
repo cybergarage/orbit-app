@@ -13,6 +13,7 @@ import type {
 	WorkspaceCommandAdapter,
 	WorkspaceCommandOutcome,
 } from "@cybergarage/orbit";
+import type { HostApprovalAttempt, HostRecoveryIdentity } from "./types";
 import { hostOriginator, hostRepository } from "./host-core";
 import {
 	admitWorkspaceReaderImage,
@@ -134,6 +135,8 @@ interface HostRunConfig {
 	model: string;
 	provider: ProviderName;
 	projectContext?: ProjectContextSnapshot;
+	recordRecoveryIdentity?: (identity: HostRecoveryIdentity) => Promise<void>;
+	recordApprovalAttempt?: (attempt: HostApprovalAttempt) => Promise<void>;
 }
 type ProviderRequest = (
 	route: string,
@@ -188,6 +191,7 @@ function projectMemory(
 export class HostAgentRun {
 	readonly name = `orbit-app-${randomUUID()}`; // durable executor child ownership
 	readonly workspaceReadsEnabled = true;
+	private readonly orbitRunId = randomUUID();
 	private readonly controller = new AbortController();
 	private agent?: Agent;
 	private session?: Session;
@@ -229,12 +233,22 @@ export class HostAgentRun {
 			request.expiresAt <= Date.now() ||
 			request.sessionId !== this.config.sessionId ||
 			request.responderScope !== "desktop-owner" ||
-			(this.handle !== undefined && this.handle.id !== request.runId) ||
+			request.runId !== this.orbitRunId ||
 			id !== request.id ||
 			typeof approve !== "boolean"
 		)
 			throw new Error("Approval is no longer pending");
 		this.approval = undefined;
+		if (approve && this.config.recordApprovalAttempt) {
+			// The durable host attempt is not a Core grant or a receipt.
+			await this.config.recordApprovalAttempt({
+				approvalId: request.id,
+				operationId: request.operationId,
+				digest: request.digest,
+			});
+			if (this.controller.signal.aborted || request.expiresAt <= Date.now())
+				throw new Error("Approval expired or was cancelled before dispatch");
+		}
 		await this.agent.replyApproval(request.runId, {
 			requestId: request.id,
 			digest: request.digest,
@@ -461,6 +475,18 @@ export class HostAgentRun {
 			throw new Error(
 				"Session does not belong to this host profile and selected workspace",
 			);
+		if (this.config.recordRecoveryIdentity) {
+			await this.config.recordRecoveryIdentity({
+				version: 1,
+				orbitRunId: this.orbitRunId,
+				storagePairId: repo.scope(this.config.sessionId).pairId,
+				executorOwner: this.name,
+				readerImage: image,
+				...(writerImage ? { writerImage } : {}),
+				...(readinessImage ? { readinessImage } : {}),
+			});
+		}
+		signal.throwIfAborted();
 		this.session = repo.open(found.file);
 		let terminalReported = false;
 		try {
@@ -595,6 +621,7 @@ export class HostAgentRun {
 				[new api.Message("user", { content: this.config.prompt })],
 				{
 					requestId: this.config.requestId,
+					turnId: this.orbitRunId,
 					...(projectContext ? { memory: { mode: "automatic" } } : {}),
 					maxToolIterations: 8,
 					onEvent: (event) => this.event({ type: "agent-event", data: event }),

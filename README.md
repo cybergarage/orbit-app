@@ -162,6 +162,9 @@ tags are never replaced. For just the fresh-default smoke, use
 `npm run test:host-default`. The Linux CI
 job exercises the Docker and application fixtures, not native macOS packaging.
 
+See [Host Agent interruption and recovery](docs/host-interruption-recovery.md)
+for the current recovery boundary and the proposed next contract.
+
 See [Host Agent and legacy profile adoption](docs/host-agent-adoption.md)
 for the verified switch-back behavior and the prerequisites for any future
 adoption action.

@@ -10,6 +10,7 @@ import {
 	type HostReader,
 	type HostWriter,
 } from "../src/host-agent";
+import type { HostApprovalAttempt, HostRecoveryIdentity } from "../src/types";
 import { command, dockerPath } from "../src/worker";
 import {
 	HostCoreNames,
@@ -151,6 +152,7 @@ test("real Core runs on the host with exactly four Docker read tools; merged set
 	};
 	const wire: any[] = [];
 	const events: any[] = [];
+	const bindingFile = path.join(f.root, "test-binding.json");
 	const run = new HostAgentRun(
 		f.workspace,
 		f.core,
@@ -160,10 +162,33 @@ test("real Core runs on the host with exactly four Docker read tools; merged set
 			model: "gpt-4o",
 			provider: "openai",
 			prompt: "Synthetic isolated read.",
+			async recordRecoveryIdentity(identity) {
+				await fs.writeFile(bindingFile, JSON.stringify(identity));
+			},
 		},
 		(e) => events.push(e),
 		async (route, body) => {
 			assert.equal(route, "openai-chat");
+			const binding: HostRecoveryIdentity = JSON.parse(
+				await fs.readFile(bindingFile, "utf8"),
+			);
+			assert.equal(binding.executorOwner, run.name);
+			assert.equal(binding.readerImage, artifact);
+			assert.equal(
+				binding.storagePairId,
+				(await hostRepository(f.core)).scope(f.sessionId).pairId,
+			);
+			const eventsFile = path.join(
+				f.core,
+				"runs",
+				f.sessionId,
+				binding.orbitRunId,
+				"events.jsonl",
+			);
+			assert.match(
+				await fs.readFile(eventsFile, "utf8"),
+				/"kind":"run-admitted"/,
+			);
 			wire.push(body);
 			switch (wire.length) {
 				case 1:
@@ -610,6 +635,7 @@ function mutationRun(
 	writer: HostWriter,
 	operations: ReadonlyArray<readonly [string, unknown]>,
 	decide: (run: HostAgentRun, id: string, i: number) => Promise<void>,
+	recordApprovalAttempt?: (attempt: HostApprovalAttempt) => Promise<void>,
 ) {
 	let modelCalls = 0;
 	let approvals = 0;
@@ -627,6 +653,7 @@ function mutationRun(
 			model: "gpt-4o",
 			provider: "openai",
 			prompt: "Synthetic Host Agent file-change test.",
+			recordApprovalAttempt,
 		},
 		(event) => {
 			if (event.type === "approval") {
@@ -678,6 +705,7 @@ test("host writer uses exact prepared digests, denies without dispatch, and reje
 	await fs.writeFile(note, "before");
 	const frames: Array<ReturnType<typeof JSON.parse>> = [];
 	const reaped: string[] = [];
+	const attemptsFile = path.join(f.root, "test-approval.json");
 	const { run, results, replies } = mutationRun(
 		f,
 		{
@@ -686,6 +714,11 @@ test("host writer uses exact prepared digests, denies without dispatch, and reje
 				assert.equal(workspace, f.workspace);
 				assert.equal(image, writerImage);
 				assert.equal(op.target, note);
+				const saved: HostApprovalAttempt = JSON.parse(
+					await fs.readFile(attemptsFile, "utf8"),
+				);
+				assert.match(saved.digest, /^[a-f0-9]{64}$/);
+				assert.ok(saved.approvalId && saved.operationId);
 				frames.push(JSON.parse(encodeWorkspaceRequest(workspace, op)));
 				return {
 					content: [{ type: "text", text: "synthetic acknowledgment" }],
@@ -704,6 +737,10 @@ test("host writer uses exact prepared digests, denies without dispatch, and reje
 			assert.equal(await fs.readFile(note, "utf8"), "before");
 			await r.approve(id, i === 2);
 			await assert.rejects(r.approve(id, true), /no longer pending/);
+		},
+		async (attempt) => {
+			// wx proves a denial, mismatched click or stale click never writes another attempt.
+			await fs.writeFile(attemptsFile, JSON.stringify(attempt), { flag: "wx" });
 		},
 	);
 	await run.start();
@@ -756,6 +793,32 @@ test("cancelled approval cannot open the workspace writer", async (t) => {
 	await Promise.all(replies);
 	await run.confirmGone();
 	await assert.rejects(fs.stat(path.join(f.workspace, "cancelled.txt")), {
+		code: "ENOENT",
+	});
+});
+
+test("a Host approval persistence failure cannot dispatch a workspace write", async (t) => {
+	const f = await fixture(t);
+	const { run, replies } = mutationRun(
+		f,
+		{
+			admit: async () => writerImage,
+			mutate: async () => assert.fail("An unrecorded approval cannot dispatch"),
+			stop: async () => {},
+		},
+		[["write", { path: "not-dispatched.txt", content: "not written" }]],
+		async (r, id) => {
+			await assert.rejects(r.approve(id, true), /recording failed/);
+			void r.stop().catch(() => {});
+		},
+		async () => {
+			throw new Error("Approval attempt recording failed");
+		},
+	);
+	await run.start().catch(() => {});
+	await Promise.all(replies);
+	await run.confirmGone();
+	await assert.rejects(fs.stat(path.join(f.workspace, "not-dispatched.txt")), {
 		code: "ENOENT",
 	});
 });

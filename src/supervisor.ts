@@ -519,11 +519,12 @@ export class Supervisor {
 				at: new Date().toISOString(),
 				data: { requestId: p.requestId, prompt, model, provider },
 			});
-			this.store.state.active = {
+			const active: NonNullable<Snapshot["active"]> = {
 				projectId: p.projectId,
 				sessionId: p.sessionId,
 				...(this.hostAgent ? { runtime: "host-v1" as const } : {}),
 			};
+			this.store.state.active = active;
 			await this.publish();
 			if (epoch !== this.epoch || this.closed || this.maintenance)
 				throw new Error("Submission cancelled");
@@ -554,7 +555,30 @@ export class Supervisor {
 				? new HostAgentRun(
 						workspace,
 						core,
-						config,
+						{
+							...config,
+							recordRecoveryIdentity: async (identity) => {
+								if (
+									this.store.state.active !== active ||
+									active.readerOwner !== identity.executorOwner ||
+									active.hostRecovery
+								)
+									throw new Error(
+										"Host recovery identity no longer matches the active run",
+									);
+								active.hostRecovery = identity;
+								await this.publish();
+							},
+							recordApprovalAttempt: async (attempt) => {
+								if (this.store.state.active !== active || !active.hostRecovery)
+									throw new Error(
+										"Cannot record approval outside its active Host run",
+									);
+								active.hostApprovalAttempts ??= [];
+								active.hostApprovalAttempts.push(attempt);
+								await this.publish();
+							},
+						},
 						event,
 						(route, body, signal) =>
 							this.models.request(

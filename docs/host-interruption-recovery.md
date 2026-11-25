@@ -60,6 +60,17 @@ Core owns journal transitions and writer release. App owns verification of the
 Docker backend and truthful desktop status. Keep those responsibilities
 separate.
 
+## Durable Host identity
+
+For new Host runs, App records the Core run ID, registered storage pair, saved
+Docker owner, and admitted immutable reader/writer/probe image IDs in the
+existing active slot before model or tool dispatch. The exact reserved run ID
+is passed to Core as the turn ID. App records an approval attempt before it
+sends a positive response to Core. The attempt is not an accepted grant, a
+child receipt, or proof of an external effect. A failed save prevents that
+dispatch. Older active records are not upgraded or replayed. The current
+recovery gate and UI do not consume the new fields yet.
+
 ## Proposed next contract
 
 Start with a Core-owned, read-only restart inspection for one exact interrupted

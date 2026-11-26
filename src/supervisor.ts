@@ -17,6 +17,7 @@ import {
 	stopWorkspaceReadiness,
 	type HostCommandProbe,
 } from "./workspace-readiness";
+import { inspectHostRestart } from "./host-restart-diagnostics";
 import { HostCoreNames, acquireHostSources } from "./host-core";
 import { ProjectKnowledge } from "./project-knowledge";
 import { AppInitialization } from "./initialization-host";
@@ -87,6 +88,7 @@ export class Supervisor {
 	private closed = false;
 	private recoveryBlocked = false;
 	private recoveryBlockReason: Snapshot["recoveryBlockReason"];
+	private hostRestartDiagnostic: Snapshot["hostRestartDiagnostic"];
 	private reconciling?: Promise<void>;
 	private saveQueue = Promise.resolve();
 	private readonly modelSelectionVersions = new Map<string, number>();
@@ -203,6 +205,7 @@ export class Supervisor {
 	}
 	async reconcileOnce() {
 		const a = this.store.state.active;
+		this.hostRestartDiagnostic = undefined;
 		if (!a) return;
 		this.recoveryBlocked = true;
 		try {
@@ -271,6 +274,11 @@ export class Supervisor {
 				error,
 				a.runtime === "host-v1" && Boolean(a.readerOwner),
 			);
+			if (this.recoveryBlockReason === "host-writer-retained")
+				this.hostRestartDiagnostic = await inspectHostRestart(
+					a,
+					this.store.location(a.projectId, a.sessionId),
+				);
 			await this.publish();
 			// Keep durable identity and block new work until recovery is verified.
 		}
@@ -292,6 +300,9 @@ export class Supervisor {
 		if (this.recoveryBlockReason)
 			state.recoveryBlockReason = this.recoveryBlockReason;
 		else delete state.recoveryBlockReason;
+		if (this.recoveryBlocked && this.hostRestartDiagnostic)
+			state.hostRestartDiagnostic = this.hostRestartDiagnostic;
+		else delete state.hostRestartDiagnostic;
 		return state;
 	}
 	async publish() {

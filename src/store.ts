@@ -210,6 +210,7 @@ export class Store {
 			appearance: _appearance,
 			defaultModel: _defaultModel,
 			health: _health,
+			hostRestartDiagnostic: _hostRestartDiagnostic,
 			...savedData
 		} = this.state;
 		const data = JSON.stringify({

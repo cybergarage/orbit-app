@@ -29,7 +29,23 @@ function RecoveryNotice({ state }: Readonly<{ state: Snapshot }>) {
 	const message = confirmedHostRecovery(state)
 		? "The Docker worker has stopped. Orbit is still protecting the session, so new runs are blocked. Your chat is saved. Use Debug to review the last run before recovery. Reconnecting Docker alone will not clear this protection."
 		: "Orbit could not confirm recovery of the previous worker. If Docker is disconnected, reconnect it and choose Recheck in Status before starting or moving a chat.";
-	return <output className="recovery-notice">{message}</output>;
+	const journal = confirmedHostRecovery(state)
+		? state.hostRestartDiagnostic?.journal
+		: undefined;
+	const detail =
+		journal &&
+		{
+			missing: "No journal was found for this run.",
+			unverified: "The run journal could not be verified.",
+			open: "No end record was found in the run journal.",
+			"terminal-recorded": "The run journal contains an end record.",
+		}[journal];
+	return (
+		<output className="recovery-notice">
+			{message}
+			{detail && <> {detail} Workspace changes have not been verified.</>}
+		</output>
+	);
 }
 function NativeDialog({
 	children,

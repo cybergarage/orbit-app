@@ -99,7 +99,11 @@ export interface HostReadinessReceipt {
 }
 export type HostRestartDiagnostic =
 	| { journal: "missing" | "unverified" }
-	| { journal: "open" | "terminal-recorded"; unresolvedOperations: number };
+	| {
+			journal: "open" | "terminal-recorded";
+			unresolvedOperations: number;
+			readinessReceipt?: "approval-matched" | "unverified";
+	  };
 export interface Snapshot {
 	defaultModel?: { model: string; provider: string };
 	maintenance?: { error?: string; complete: boolean };

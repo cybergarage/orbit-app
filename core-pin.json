@@ -1,10 +1,10 @@
 {
-	"version": "0.9.4-next.1",
-	"resolved": "https://registry.npmjs.org/@cybergarage/orbit/-/orbit-0.9.4-next.1.tgz",
-	"integrity": "sha512-ye3HB+9DQD7/c5NBbwNwrrWzudf3GJZoeC9AN/G7eLbtJNuC6b4MP1nVAC7vqyc7uxBoclUTbu8/VVVetM2zVg==",
+	"version": "0.9.4-next.2",
+	"resolved": "https://registry.npmjs.org/@cybergarage/orbit/-/orbit-0.9.4-next.2.tgz",
+	"integrity": "sha512-OLsWbxQae7z2bOXqbDSkXpYa7twhdspVlEVTjR+73U2Wy79LSObRgwOzjoj+ZMNL6kC2Uta2UUSHp6qtVjrecQ==",
 	"source": {
 		"repository": "https://github.com/cybergarage/orbit",
-		"tag": "v0.9.4-next.1",
-		"commit": "ea61595e7f4424a6719d838c908d861f4b71323a"
+		"tag": "v0.9.4-next.2",
+		"commit": "17a3678890246a78da665c578d2cbc522371bd9c"
 	}
 }

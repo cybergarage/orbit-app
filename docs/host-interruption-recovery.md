@@ -127,8 +127,13 @@ image, exit state and exit code. No receipt is synthesized on cancellation,
 interruption before observation, or mismatch. The receipt survives an App
 process restart while the active slot is retained; it is not an audit log
 once the active slot is cleared. It is not sent to the renderer or used to
-resolve the operation. Independent Core-side receipt validation and any
-user-facing receipt status are separate work.
+resolve the operation. On restart, App checks its saved scope, immutable image,
+owner, child ID shape and single approval attempt, then Core independently
+matches the binding against the original request, grant, and pending command
+intent. The notice reports only a matching approval or an unverified receipt;
+it never displays the receipt itself. A receipt for a command with an already
+recorded successful outcome is not a match for this pending-only inspection.
+Neither status changes the writer gate or establishes any workspace effects.
 
 Before considering a write-capable recovery transition, specify reviewed
 evidence for each permitted effect and require Core to revalidate under

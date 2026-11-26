@@ -504,9 +504,17 @@ async function exerciseRestartAfterReceipt(
 			(await readRegistry(base)).active.hostReadinessReceipt,
 			record,
 		);
-		assert.equal(
-			(await snapshot(reopened)).active.hostReadinessReceipt,
-			undefined,
+		const resumed = await snapshot(reopened);
+		assert.equal(resumed.active.hostReadinessReceipt, undefined);
+		// The provider was already called again, so Core recorded the tool result
+		// before interruption. The retained receipt cannot match a pending intent.
+		assert.deepEqual(resumed.hostRestartDiagnostic, {
+			journal: "open",
+			unresolvedOperations: 0,
+			readinessReceipt: "unverified",
+		});
+		await expect(reopened.locator(".recovery-notice")).toContainText(
+			"The saved readiness probe report could not be matched to a pending approval.",
 		);
 		provider.verify();
 		assert.equal(provider.requests.length, offset + 2);

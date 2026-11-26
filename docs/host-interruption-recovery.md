@@ -80,6 +80,13 @@ unresolved intent, unchanged journal and writer ownership record, and no
 replay after killing the synthetic Electron instance and restarting with the
 probe disabled.
 
+To run just the packaged readiness scenarios on macOS arm64 with Docker
+running, use `npm run build -- --fresh-host-default` and then
+`npm run test:electron-sqlite -- host-readiness`. Optionally set
+`ORBIT_APP_TEST_DISPLAY` to an active display's exact label for the second
+command. The fixture places and verifies its own window before interruption
+and after relaunch; it does not change macOS display settings.
+
 ## Proposed next contract
 
 Before adding operation-level evidence, bind the inspected record to the

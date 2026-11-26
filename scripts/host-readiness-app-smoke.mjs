@@ -373,6 +373,41 @@ async function assertRetainedRecovery(page, chat, owner) {
 	await page.getByRole("button", { name: session.name, exact: true }).click();
 }
 
+async function confirmTestDisplay(app, phase) {
+	const label = process.env.ORBIT_APP_TEST_DISPLAY;
+	if (!label) return;
+	const result = await app.evaluate(({ BrowserWindow, screen }, label) => {
+		const targets = screen
+			.getAllDisplays()
+			.filter((display) => display.label === label);
+		if (targets.length !== 1)
+			throw new Error(`Expected one active display named ${label}`);
+		const [display] = targets;
+		const windows = BrowserWindow.getAllWindows().filter((window) =>
+			window.isVisible(),
+		);
+		if (windows.length !== 1)
+			throw new Error("Expected one visible fixture window");
+		const [window] = windows;
+		const bounds = window.getBounds();
+		const { x, y, width, height } = display.workArea;
+		window.setPosition(
+			x + Math.floor((width - bounds.width) / 2),
+			y + Math.floor((height - bounds.height) / 2),
+		);
+		return {
+			expected: display.id,
+			actual: screen.getDisplayMatching(window.getBounds()).id,
+		};
+	}, label);
+	assert.equal(
+		result.actual,
+		result.expected,
+		`Fixture window placement: ${phase}`,
+	);
+	console.log(`Packaged Orbit App: verified display ${label} (${phase}).`);
+}
+
 async function exerciseRestart(
 	executablePath,
 	base,
@@ -385,6 +420,7 @@ async function exerciseRestart(
 	let app = await launch(executablePath, base, port, env, true);
 	try {
 		const page = await app.firstWindow();
+		await confirmTestDisplay(app, "before interruption");
 		const { chat, owner, offset } = await prepareDecision(
 			page,
 			provider,
@@ -433,6 +469,7 @@ async function exerciseRestart(
 
 		app = await launch(executablePath, base, port, env, true, false);
 		const reopened = await app.firstWindow();
+		await confirmTestDisplay(app, "after relaunch");
 		const state = await snapshot(reopened);
 		assert.equal(state.executionBackend, "host-readonly");
 		assert.equal(state.executionReadinessProbe, undefined);

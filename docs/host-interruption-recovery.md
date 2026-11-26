@@ -87,6 +87,19 @@ running, use `npm run build -- --fresh-host-default` and then
 command. The fixture places and verifies its own window before interruption
 and after relaunch; it does not change macOS display settings.
 
+The packaged readiness suite separates four restart cases. It pauses only a
+synthetic Electron instance immediately before removal of its exact exited
+probe container, after the receipt is persisted but before Core records a
+result. A second run uses that same crash point and injects a conflicting image
+identity into its own synthetic registry. Another run waits for the synthetic
+provider's follow-up request and verifies the matching Core operation result
+already exists. The early-interruption case has no receipt. Relaunch checks
+that the journal and writer evidence are unchanged, no probe is replayed, and
+no raw receipt reaches the renderer. Only the pending, matching case displays
+a verified approval. The current Core API does not identify a completed
+result for a supplied approval binding; zero unresolved operations alone is
+not evidence that this particular probe result was recorded.
+
 ## Proposed next contract
 
 Before adding operation-level evidence, bind the inspected record to the

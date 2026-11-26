@@ -68,22 +68,23 @@ existing active slot before model or tool dispatch. The exact reserved run ID
 is passed to Core as the turn ID. App records an approval attempt before it
 sends a positive response to Core. The attempt is not an accepted grant, a
 child receipt, or proof of an external effect. A failed save prevents that
-dispatch. Older active records are not upgraded or replayed. The recovery gate does not consume the new fields. Once the host restart
-check confirms retained writer protection, App uses the saved identity to
+dispatch. Older active records are not upgraded or replayed. The recovery
+gate does not consume the new fields. Once the host restart check confirms
+retained writer protection, App uses the saved identity to
 inspect the exact Core run. The UI shows a short journal status only; the
 new diagnostic exposes no operation IDs or approval digests. An end record does
 not verify workspace changes or unblock the run.
 
+The packaged restart proof checks the visible open journal status, one
+unresolved intent, unchanged journal and writer ownership record, and no
+replay after killing the synthetic Electron instance and restarting with the
+probe disabled.
+
 ## Proposed next contract
 
-Start with a Core-owned, read-only restart inspection for one exact interrupted
-run, not a release or replay API. It should report whether the evidence is
-sufficient to *review* recovery, why it is blocked, and whether a writer is
-still retained. No inspection should update the journal, transmit workspace
-data, or launch an operation.
-
-Bind the inspected record to the canonical storage pair, session, run,
-operation, original approval digest, and executor profile. For the Docker
+Before adding operation-level evidence, bind the inspected record to the
+canonical storage pair, session, run, operation, original approval digest, and
+executor profile. For the Docker
 backend, use the durable owner and immutable image identity admitted for
 that run. Persist any future receipt before relying on it across a restart.
 The receipt must be scoped to the actual child and operation; a mutable tag,

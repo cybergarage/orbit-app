@@ -85,6 +85,18 @@ export interface HostApprovalAttempt {
 	approvalId: string;
 	digest: string;
 }
+/** A backend observation, never reconciliation or permission to release a writer. */
+export interface HostReadinessReceipt {
+	version: 1;
+	storagePairId: string;
+	sessionId: string;
+	orbitRunId: string;
+	executorOwner: string;
+	image: string;
+	containerId: string;
+	approval: HostApprovalAttempt;
+	outcome: "fixed-probe-exited-zero";
+}
 export type HostRestartDiagnostic =
 	| { journal: "missing" | "unverified" }
 	| { journal: "open" | "terminal-recorded"; unresolvedOperations: number };
@@ -107,6 +119,7 @@ export interface Snapshot {
 		readerOwner?: string;
 		hostRecovery?: HostRecoveryIdentity;
 		hostApprovalAttempts?: HostApprovalAttempt[];
+		hostReadinessReceipt?: HostReadinessReceipt;
 		workspaceMutations?: boolean;
 		workspaceReads?: boolean;
 		workspaceReadiness?: boolean;

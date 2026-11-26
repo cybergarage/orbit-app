@@ -119,6 +119,17 @@ digests, operation identifiers, or raw output. Repeated inspection must remain
 read-only and must neither replay the operation nor release the writer. Do not
 reuse readiness evidence to reconcile a file edit or an unrestricted command.
 
+The first capture step writes a private v1 receipt to the App's active
+registry before explicitly removing its fixed probe container. It requires
+the saved approval attempt to match the sole unresolved Core operation at
+dispatch, then checks the expected output and Docker's owned container ID,
+image, exit state and exit code. No receipt is synthesized on cancellation,
+interruption before observation, or mismatch. The receipt survives an App
+process restart while the active slot is retained; it is not an audit log
+once the active slot is cleared. It is not sent to the renderer or used to
+resolve the operation. Independent Core-side receipt validation and any
+user-facing receipt status are separate work.
+
 Before considering a write-capable recovery transition, specify reviewed
 evidence for each permitted effect and require Core to revalidate under
 exclusive ownership. A future transition should retain the original terminal

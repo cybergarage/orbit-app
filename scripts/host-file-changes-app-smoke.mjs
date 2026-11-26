@@ -31,6 +31,7 @@ export function fixtureProvider() {
 	let tools = new Set();
 	let expected = [];
 	let failure;
+	let beforeReply;
 	const server = createServer(async (req, res) => {
 		try {
 			assert.equal(req.headers.authorization, `Bearer ${key}`);
@@ -75,6 +76,7 @@ export function fixtureProvider() {
 			assert.ok(expected.length > 0, "Unexpected chat request");
 			requests.push(request);
 			const [name, args] = expected.shift();
+			await beforeReply?.(request);
 			const message = name
 				? {
 						role: "assistant",
@@ -121,6 +123,9 @@ export function fixtureProvider() {
 		plan(names, sequence) {
 			tools = new Set(names);
 			expected = [...sequence];
+		},
+		beforeReply(observe) {
+			beforeReply = observe;
 		},
 		verify() {
 			assert.ifError(failure);

@@ -67,7 +67,7 @@ export function readinessArgs(
 		"org.cybergarage.orbit-app.role=workspace-readiness",
 	);
 	return [
-		...base.filter((arg) => arg !== "-i"),
+		...base.filter((arg) => arg !== "-i" && arg !== "--rm"),
 		"--label",
 		`${ownerLabel}=${parent}`,
 		"--mount",
@@ -169,6 +169,7 @@ export interface HostCommandProbe {
 		artifact: string,
 		op: PreparedWorkspaceCommand,
 		signal: AbortSignal,
+		recordExit?: (containerId: string) => Promise<void>,
 	): Promise<WorkspaceCommandOutcome>;
 	stop(parent: string): Promise<void>;
 }
@@ -220,33 +221,59 @@ export function createDockerHostCommandProbe(
 			if (signal.aborted || !immutable.test(artifact)) return false;
 			return (await admit(artifact)) === artifact && !signal.aborted;
 		},
-		async execute(parent, workspace, artifact, op, signal) {
+		async execute(parent, workspace, artifact, op, signal, recordExit) {
 			if (signal.aborted || !approvedReadiness(op, workspace, artifact))
 				return unknown;
-			let reply: string;
 			try {
-				reply = await start(
+				const reply = await start(
 					dockerPath,
 					readinessArgs(parent, workspace, artifact),
 					signal,
 				);
+				if (
+					signal.aborted ||
+					reply !== JSON.stringify({ exitCode: 0, stdout: readyOutput })
+				)
+					return unknown;
+				if (recordExit) {
+					const observed = await run(
+						dockerPath,
+						[
+							"inspect",
+							"--format",
+							`{{.Id}} {{.Image}} {{.State.Status}} {{.State.ExitCode}} {{index .Config.Labels "${ownerLabel}"}}`,
+							childName(parent),
+						],
+						2000,
+					);
+					const [id, image, status, code, owner, ...extra] = observed
+						.trim()
+						.split(/\s+/);
+					if (
+						signal.aborted ||
+						extra.length !== 0 ||
+						!/^[0-9a-f]{64}$/.test(id) ||
+						image !== artifact ||
+						status !== "exited" ||
+						code !== "0" ||
+						owner !== parent
+					)
+						return unknown;
+					await recordExit(id);
+					if (signal.aborted) return unknown;
+				}
+				return {
+					status: "exited",
+					exitCode: 0,
+					stdout: readyOutput,
+					stderr: "",
+					text: readyOutput.trim(),
+				};
 			} catch {
 				return unknown;
 			} finally {
 				await stopWorkspaceReadiness(parent, run);
 			}
-			if (
-				signal.aborted ||
-				reply !== JSON.stringify({ exitCode: 0, stdout: readyOutput })
-			)
-				return unknown;
-			return {
-				status: "exited",
-				exitCode: 0,
-				stdout: readyOutput,
-				stderr: "",
-				text: readyOutput.trim(),
-			};
 		},
 		stop: (parent) => stopWorkspaceReadiness(parent, run),
 	};

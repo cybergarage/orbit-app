@@ -24,6 +24,7 @@ assert.ok(
 		"default-package",
 		"host-default-proof",
 		"host-file-changes",
+		"host-readiness",
 		"host-profile-transition",
 	].includes(mode),
 );
@@ -220,6 +221,11 @@ try {
 				"./host-default-app-smoke.mjs"
 			);
 			await verifyPackagedHostDefault(bundle, emitted, scratch, root);
+		} else if (mode === "host-readiness") {
+			const { verifyPackagedWorkspaceReadiness } = await import(
+				"./host-readiness-app-smoke.mjs"
+			);
+			await verifyPackagedWorkspaceReadiness(emitted, scratch, root);
 		} else if (mode === "host-file-changes") {
 			const { verifyPackagedWorkspaceWrites } = await import(
 				"./host-file-changes-app-smoke.mjs"

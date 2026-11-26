@@ -373,6 +373,41 @@ async function assertRetainedRecovery(page, chat, owner) {
 	await page.getByRole("button", { name: session.name, exact: true }).click();
 }
 
+async function confirmTestDisplay(app, phase) {
+	const label = process.env.ORBIT_APP_TEST_DISPLAY;
+	if (!label) return;
+	const result = await app.evaluate(({ BrowserWindow, screen }, label) => {
+		const targets = screen
+			.getAllDisplays()
+			.filter((display) => display.label === label);
+		if (targets.length !== 1)
+			throw new Error(`Expected one active display named ${label}`);
+		const [display] = targets;
+		const windows = BrowserWindow.getAllWindows().filter((window) =>
+			window.isVisible(),
+		);
+		if (windows.length !== 1)
+			throw new Error("Expected one visible fixture window");
+		const [window] = windows;
+		const bounds = window.getBounds();
+		const { x, y, width, height } = display.workArea;
+		window.setPosition(
+			x + Math.floor((width - bounds.width) / 2),
+			y + Math.floor((height - bounds.height) / 2),
+		);
+		return {
+			expected: display.id,
+			actual: screen.getDisplayMatching(window.getBounds()).id,
+		};
+	}, label);
+	assert.equal(
+		result.actual,
+		result.expected,
+		`Fixture window placement: ${phase}`,
+	);
+	console.log(`Packaged Orbit App: verified display ${label} (${phase}).`);
+}
+
 async function exerciseRestart(
 	executablePath,
 	base,
@@ -385,6 +420,7 @@ async function exerciseRestart(
 	let app = await launch(executablePath, base, port, env, true);
 	try {
 		const page = await app.firstWindow();
+		await confirmTestDisplay(app, "before interruption");
 		const { chat, owner, offset } = await prepareDecision(
 			page,
 			provider,
@@ -395,6 +431,24 @@ async function exerciseRestart(
 		);
 		await page.getByRole("button", { name: "Approve", exact: true }).click();
 		const child = await waitProbeRunning(env, owner);
+		const active = (await snapshot(page)).active;
+		const saved = active.hostRecovery;
+		assert.equal(saved.executorOwner, owner);
+		assert.equal(saved.readinessImage, imageId);
+		const core = path.join(path.dirname(chat.cwd), "core");
+		const journal = path.join(
+			core,
+			"runs",
+			active.sessionId,
+			saved.orbitRunId,
+			"events.jsonl",
+		);
+		const ownerEvidence = path.join(
+			core,
+			"sessions",
+			".coordination",
+			`${active.sessionId}.owner`,
+		);
 		const process = app.process();
 		const exited = once(process, "exit", {
 			signal: AbortSignal.timeout(5_000),
@@ -407,14 +461,38 @@ async function exerciseRestart(
 		assert.equal(signal, "SIGKILL");
 		app = undefined;
 		assert.equal(await waitProbeRunning(env, owner), child);
+		const [journalBefore, ownerBefore] = await Promise.all([
+			fs.readFile(journal),
+			fs.stat(ownerEvidence),
+		]);
+		assert.match(journalBefore.toString("utf8"), /"kind":"operation-intent"/);
 
 		app = await launch(executablePath, base, port, env, true, false);
 		const reopened = await app.firstWindow();
+		await confirmTestDisplay(app, "after relaunch");
 		const state = await snapshot(reopened);
 		assert.equal(state.executionBackend, "host-readonly");
 		assert.equal(state.executionReadinessProbe, undefined);
 		await assertProbeTerminated(env, owner, child);
 		await assertRetainedRecovery(reopened, chat, owner);
+		const notice = reopened.locator(".recovery-notice");
+		await expect(notice).toContainText(
+			"No end record was found in the run journal.",
+		);
+		await expect(notice).toContainText(
+			"Workspace changes have not been verified.",
+		);
+		for (const observation of [state, await snapshot(reopened)]) {
+			assert.deepEqual(observation.active.hostRecovery, saved);
+			assert.deepEqual(observation.hostRestartDiagnostic, {
+				journal: "open",
+				unresolvedOperations: 1,
+			});
+		}
+		assert.deepEqual(await fs.readFile(journal), journalBefore);
+		const ownerAfter = await fs.stat(ownerEvidence);
+		assert.equal(ownerAfter.ino, ownerBefore.ino);
+		assert.equal(ownerAfter.mtimeMs, ownerBefore.mtimeMs);
 		assertNoReplay(provider, offset);
 	} finally {
 		await app?.close();

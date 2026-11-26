@@ -354,6 +354,10 @@ async function hostReadinessScenario(
 	const requests: any[] = [];
 	const events: any[] = [];
 	const artifact = await probe.admit();
+	let recovery: HostRecoveryIdentity | undefined;
+	let duringDispatch:
+		| Awaited<ReturnType<typeof inspectHostRestart>>
+		| undefined;
 	const run = new HostAgentRun(
 		f.workspace,
 		f.core,
@@ -363,6 +367,9 @@ async function hostReadinessScenario(
 			model: "gpt-4o",
 			provider: "openai",
 			prompt: "Synthetic fixed readiness probe only.",
+			async recordRecoveryIdentity(identity) {
+				recovery = identity;
+			},
 		},
 		(event) => {
 			events.push(event);
@@ -391,7 +398,23 @@ async function hostReadinessScenario(
 			stop: async () => {},
 		},
 		undefined,
-		probe,
+		{
+			...probe,
+			async execute(...args) {
+				duringDispatch = await inspectHostRestart(
+					{
+						projectId: randomUUID(),
+						sessionId: f.sessionId,
+						runtime: "host-v1",
+						readerOwner: run.name,
+						workspaceReadiness: true,
+						hostRecovery: recovery,
+					},
+					f,
+				);
+				return probe.execute(...args);
+			},
+		},
 	);
 	await run.start();
 	await Promise.all(replies);
@@ -411,6 +434,10 @@ async function hostReadinessScenario(
 	assert.match(preview.execution, /fixed Docker readiness probe/i);
 	assert.deepEqual(await fs.readdir(f.workspace), []);
 	if (mode === "approve") {
+		assert.deepEqual(duringDispatch, {
+			journal: "open",
+			unresolvedOperations: 1,
+		});
 		assert.match(JSON.stringify(requests[2]), /workspace command ready/);
 		assert.equal(
 			events.find((e) => e.type === "result")?.data?.runtime?.outcome,

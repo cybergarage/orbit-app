@@ -431,13 +431,209 @@ async function confirmTestDisplay(app, phase) {
 	console.log(`Packaged Orbit App: verified display ${label} (${phase}).`);
 }
 
+function registryPath(base) {
+	return path.join(`${base}-host-agent-native-v2`, "registry", "state.json");
+}
+
 async function readRegistry(base) {
-	return JSON.parse(
-		await fs.readFile(
-			path.join(`${base}-host-agent-native-v2`, "registry", "state.json"),
-			"utf8",
+	return JSON.parse(await fs.readFile(registryPath(base), "utf8"));
+}
+
+function runEvidencePaths(cwd, active) {
+	const core = path.join(path.dirname(cwd), "core");
+	return {
+		journal: path.join(
+			core,
+			"runs",
+			active.sessionId,
+			active.hostRecovery.orbitRunId,
+			"events.jsonl",
 		),
+		writer: path.join(
+			core,
+			"sessions",
+			".coordination",
+			`${active.sessionId}.owner`,
+		),
+	};
+}
+
+function operationEvents(bytes, operationId) {
+	return bytes
+		.toString("utf8")
+		.trimEnd()
+		.split("\n")
+		.map((line) => JSON.parse(line))
+		.filter(({ data }) => data.operationId === operationId);
+}
+
+// Only the synthetic Electron process is instrumented. At the exact owned
+// child's removal, the receipt is on disk but the command has not returned to
+// Core. This does not replace stdout, Docker exit evidence, or Core events.
+async function armReceiptCrash(app, base, owner, marker) {
+	await app.evaluate(
+		(_, { registry, owner, marker }) => {
+			const fs = process.getBuiltinModule("node:fs");
+			const children = process.getBuiltinModule("node:child_process");
+			const { spawn } = children;
+			children.spawn = function (file, args, ...options) {
+				if (
+					file === "/usr/local/bin/docker" &&
+					args?.length === 3 &&
+					args[0] === "rm" &&
+					args[1] === "-f"
+				) {
+					const { active } = JSON.parse(fs.readFileSync(registry, "utf8"));
+					const receipt = active?.hostReadinessReceipt;
+					if (
+						receipt?.executorOwner === owner &&
+						receipt.containerId === args[2]
+					) {
+						fs.writeFileSync(marker, receipt.containerId, {
+							flag: "wx",
+							mode: 0o600,
+						});
+						process.kill(process.pid, "SIGSTOP");
+						throw Error("The synthetic crash fixture must not resume");
+					}
+				}
+				return spawn.call(this, file, args, ...options);
+			};
+		},
+		{ registry: registryPath(base), owner, marker },
 	);
+}
+
+async function exerciseRestartBeforeResult(
+	executablePath,
+	base,
+	port,
+	env,
+	provider,
+	imageId,
+	conflicting,
+) {
+	await fs.mkdir(base, { mode: 0o700 });
+	let app = await launch(executablePath, base, port, env, true);
+	let owner;
+	let armed = false;
+	try {
+		const page = await app.firstWindow();
+		await confirmTestDisplay(app, "before pending-result interruption");
+		const prepared = await prepareDecision(
+			page,
+			provider,
+			env,
+			base,
+			imageId,
+			false,
+		);
+		const { chat, offset } = prepared;
+		owner = prepared.owner;
+		const marker = path.join(base, "receipt-crash-barrier");
+		await armReceiptCrash(app, base, owner, marker);
+		armed = true;
+		await page.getByRole("button", { name: "Approve", exact: true }).click();
+		await expect
+			.poll(
+				async () => (await fs.stat(marker).catch(() => undefined))?.isFile(),
+				{
+					timeout: 15_000,
+				},
+			)
+			.toBe(true);
+		const interrupted = app;
+		app = undefined;
+		await killFixtureApp(interrupted);
+		armed = false;
+
+		const registry = await readRegistry(base);
+		const { active } = registry;
+		const receipt = active.hostReadinessReceipt;
+		assert.equal(receipt.executorOwner, owner);
+		assert.equal(receipt.image, imageId);
+		const child = await fs.readFile(marker, "utf8");
+		assert.match(child, /^[a-f0-9]{64}$/);
+		assert.equal(receipt.containerId, child);
+		assert.equal(
+			docker(
+				["inspect", "--format", "{{.State.Status}} {{.State.ExitCode}}", child],
+				env,
+			),
+			"exited 0",
+		);
+		const { journal, writer } = runEvidencePaths(chat.cwd, active);
+		const [journalBefore, writerBefore, writerStat] = await Promise.all([
+			fs.readFile(journal),
+			fs.readFile(writer),
+			fs.stat(writer),
+		]);
+		const operation = operationEvents(
+			journalBefore,
+			receipt.approval.operationId,
+		);
+		assert.ok(operation.some(({ kind }) => kind === "operation-intent"));
+		assert.ok(!operation.some(({ kind }) => kind === "operation-result"));
+		if (conflicting) {
+			// Change only this synthetic registry, after its writer has died.
+			receipt.image = `sha256:${"0".repeat(64)}`;
+			assert.notEqual(receipt.image, imageId);
+			await fs.writeFile(registryPath(base), JSON.stringify(registry));
+		}
+		app = await launch(executablePath, base, port, env, true, false);
+		const reopened = await app.firstWindow();
+		await confirmTestDisplay(app, "after pending-result relaunch");
+		await assertRetainedRecovery(reopened, chat, owner);
+		await assertOneCompletedProbe(env, owner);
+		const notice = reopened.locator(".recovery-notice");
+		await expect(notice).toContainText(
+			conflicting
+				? "The saved readiness probe report could not be matched to a pending approval."
+				: "The saved readiness probe report matches the original approval.",
+		);
+		assert.equal(
+			(await snapshot(reopened)).active.hostReadinessReceipt,
+			undefined,
+		);
+		assert.deepEqual((await snapshot(reopened)).hostRestartDiagnostic, {
+			journal: "open",
+			unresolvedOperations: 1,
+			readinessReceipt: conflicting ? "unverified" : "approval-matched",
+		});
+		assert.deepEqual(
+			(await readRegistry(base)).active.hostReadinessReceipt,
+			receipt,
+		);
+		assert.deepEqual(await fs.readFile(journal), journalBefore);
+		assert.deepEqual(await fs.readFile(writer), writerBefore);
+		assert.equal((await fs.stat(writer)).ino, writerStat.ino);
+		assertNoReplay(provider, offset);
+	} finally {
+		if (app && armed) {
+			await killFixtureApp(app);
+		} else {
+			await app?.close();
+		}
+		if (owner) {
+			// Remove only a remaining fixture child with our exact owner and role.
+			const child = docker(
+				[
+					"ps",
+					"-aq",
+					"--no-trunc",
+					"--filter",
+					`label=org.cybergarage.orbit-app.workspace-parent=${owner}`,
+					"--filter",
+					"label=org.cybergarage.orbit-app.role=workspace-readiness",
+				],
+				env,
+			);
+			if (child) {
+				assert.match(child, /^[a-f0-9]{64}$/);
+				docker(["rm", "-f", child], env);
+			}
+		}
+	}
 }
 
 async function killFixtureApp(app) {
@@ -488,6 +684,18 @@ async function exerciseRestartAfterReceipt(
 		assert.equal(record.executorOwner, owner);
 		await assertOneCompletedProbe(env, owner);
 		assert.equal(provider.requests.length, offset + 2);
+		const { active } = await readRegistry(base);
+		const { journal, writer } = runEvidencePaths(chat.cwd, active);
+		const [journalBefore, writerBefore] = await Promise.all([
+			fs.readFile(journal),
+			fs.readFile(writer),
+		]);
+		assert.ok(
+			operationEvents(journalBefore, record.approval.operationId).some(
+				({ kind, data }) =>
+					kind === "operation-result" && data.status === "succeeded",
+			),
+		);
 		await killFixtureApp(app);
 		app = undefined;
 		provider.beforeReply(undefined);
@@ -516,6 +724,8 @@ async function exerciseRestartAfterReceipt(
 		await expect(reopened.locator(".recovery-notice")).toContainText(
 			"The saved readiness probe report could not be matched to a pending approval.",
 		);
+		assert.deepEqual(await fs.readFile(journal), journalBefore);
+		assert.deepEqual(await fs.readFile(writer), writerBefore);
 		provider.verify();
 		assert.equal(provider.requests.length, offset + 2);
 	} finally {
@@ -599,6 +809,7 @@ async function exerciseRestart(
 		await expect(notice).toContainText(
 			"Workspace changes have not been verified.",
 		);
+		await expect(notice).not.toContainText("saved readiness probe report");
 		for (const observation of [state, await snapshot(reopened)]) {
 			assert.deepEqual(observation.active.hostRecovery, saved);
 			assert.equal(observation.active.hostReadinessReceipt, undefined);
@@ -716,6 +927,20 @@ export async function verifyPackagedWorkspaceReadiness(
 			);
 		await decision("denied", false);
 		await decision("approved", true);
+		for (const conflicting of [false, true]) {
+			await exerciseRestartBeforeResult(
+				executablePath,
+				path.join(
+					scratch,
+					conflicting ? "restart-with-conflict" : "restart-before-result",
+				),
+				address.port,
+				env,
+				provider,
+				productionId,
+				conflicting,
+			);
+		}
 		await exerciseRestartAfterReceipt(
 			executablePath,
 			path.join(scratch, "restart-with-receipt"),
@@ -760,7 +985,7 @@ export async function verifyPackagedWorkspaceReadiness(
 		);
 
 		console.log(
-			"Packaged Orbit App: fixed readiness preview, denial without launch, approved execution, cancellation, restart recovery, missing image refusal, and legacy opt-out verified.",
+			"Packaged Orbit App: fixed readiness preview, approval, cancellation, restart with pending, completed, conflicting, or absent evidence, missing image refusal, and legacy opt-out verified.",
 		);
 	} finally {
 		try {

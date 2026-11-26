@@ -10,6 +10,7 @@ import {
 	type HostReader,
 	type HostWriter,
 } from "../src/host-agent";
+import { inspectHostRestart } from "../src/host-restart-diagnostics";
 import type { HostApprovalAttempt, HostRecoveryIdentity } from "../src/types";
 import { command, dockerPath } from "../src/worker";
 import {
@@ -98,6 +99,102 @@ function completion(name?: string, args?: unknown) {
 		],
 	};
 }
+
+test("restart inspection stays scoped to the saved run and never releases the writer", async (t) => {
+	const f = await fixture(t);
+	const repo = await hostRepository(f.core);
+	const artifact = `sha256:${"c".repeat(64)}`;
+	let recovery: HostRecoveryIdentity | undefined;
+	const run = new HostAgentRun(
+		f.workspace,
+		f.core,
+		{
+			sessionId: f.sessionId,
+			requestId: randomUUID(),
+			model: "gpt-4o",
+			provider: "openai",
+			prompt: "Synthetic restart inspection.",
+			async recordRecoveryIdentity(identity) {
+				recovery = identity;
+			},
+		},
+		() => {},
+		async () => completion(),
+		{
+			admit: async () => artifact,
+			read: async () => {
+				throw new Error("Unexpected workspace read");
+			},
+			stop: async () => {},
+		},
+	);
+	await run.start();
+	await run.confirmGone();
+	assert.ok(recovery);
+	const active = {
+		runtime: "host-v1" as const,
+		projectId: randomUUID(),
+		sessionId: f.sessionId,
+		readerOwner: run.name,
+		hostRecovery: recovery,
+	};
+	const { coordinationPaths } = await import("@cybergarage/orbit");
+	const { guard } = coordinationPaths(repo.scope(f.sessionId));
+	assert.deepEqual(await inspectHostRestart(active, f), {
+		journal: "unverified",
+	});
+	await fs.writeFile(guard, "synthetic retained guard", { flag: "wx" });
+	const journal = path.join(
+		f.core,
+		"runs",
+		f.sessionId,
+		recovery.orbitRunId,
+		"events.jsonl",
+	);
+	const bytes = await fs.readFile(journal);
+	for (let i = 0; i < 2; i++) {
+		assert.deepEqual(await inspectHostRestart(active, f), {
+			journal: "terminal-recorded",
+			unresolvedOperations: 0,
+		});
+	}
+	assert.deepEqual(
+		await inspectHostRestart(
+			{
+				...active,
+				hostRecovery: { ...recovery, orbitRunId: randomUUID() },
+			},
+			f,
+		),
+		{ journal: "missing" },
+	);
+	assert.deepEqual(
+		await inspectHostRestart(
+			{
+				...active,
+				hostRecovery: { ...recovery, storagePairId: randomUUID() },
+			},
+			f,
+		),
+		{ journal: "unverified" },
+	);
+	assert.deepEqual(
+		await inspectHostRestart(
+			{
+				...active,
+				readerOwner: `orbit-app-${randomUUID()}`,
+			},
+			f,
+		),
+		{ journal: "unverified" },
+	);
+	assert.deepEqual(
+		await inspectHostRestart(active, { ...f, workspace: f.core }),
+		{ journal: "unverified" },
+	);
+	assert.deepEqual(await fs.readFile(journal), bytes);
+	assert.equal(await fs.readFile(guard, "utf8"), "synthetic retained guard");
+});
 
 test("isolated host-profile marker refuses unmarked, pre-existing directories", async (t) => {
 	const base = await fs.mkdtemp(

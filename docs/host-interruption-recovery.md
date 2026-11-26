@@ -68,8 +68,11 @@ existing active slot before model or tool dispatch. The exact reserved run ID
 is passed to Core as the turn ID. App records an approval attempt before it
 sends a positive response to Core. The attempt is not an accepted grant, a
 child receipt, or proof of an external effect. A failed save prevents that
-dispatch. Older active records are not upgraded or replayed. The current
-recovery gate and UI do not consume the new fields yet.
+dispatch. Older active records are not upgraded or replayed. The recovery gate does not consume the new fields. Once the host restart
+check confirms retained writer protection, App uses the saved identity to
+inspect the exact Core run. The UI shows a short journal status only; the
+new diagnostic exposes no operation IDs or approval digests. An end record does
+not verify workspace changes or unblock the run.
 
 ## Proposed next contract
 

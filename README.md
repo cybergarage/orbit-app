@@ -112,7 +112,7 @@ Electron owns model transport in Host mode, and legacy workers use constrained
 RPC. Settings defaults apply to
 new chats; existing choices and admitted runs remain isolated. No models are downloaded.
 The Host Agent and legacy worker pin the published
-`@cybergarage/orbit@0.9.4-next.0` package, not npm's moving `next` tag.
+`@cybergarage/orbit@0.9.4-next.1` package, not npm's moving `next` tag.
 [Core pin metadata](core-pin.json) records the source release and SHA-512
 integrity verified against both lockfiles. To use the new pin on the legacy route,
 rebuild its image with `npm run worker:build`; the runtime does not pull a

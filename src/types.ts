@@ -85,6 +85,9 @@ export interface HostApprovalAttempt {
 	approvalId: string;
 	digest: string;
 }
+export type HostRestartDiagnostic =
+	| { journal: "missing" | "unverified" }
+	| { journal: "open" | "terminal-recorded"; unresolvedOperations: number };
 export interface Snapshot {
 	defaultModel?: { model: string; provider: string };
 	maintenance?: { error?: string; complete: boolean };
@@ -112,6 +115,8 @@ export interface Snapshot {
 	recoveryBlocked?: boolean;
 	/** A fresh host observation, not persisted recovery authority. */
 	recoveryBlockReason?: "host-writer-retained";
+	/** Read-only, snapshot-only Core observation; never recovery authority. */
+	hostRestartDiagnostic?: HostRestartDiagnostic;
 }
 export interface Health {
 	catalog?: ProviderCatalog;

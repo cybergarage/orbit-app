@@ -29,9 +29,14 @@ function RecoveryNotice({ state }: Readonly<{ state: Snapshot }>) {
 	const message = confirmedHostRecovery(state)
 		? "The Docker worker has stopped. Orbit is still protecting the session, so new runs are blocked. Your chat is saved. Use Debug to review the last run before recovery. Reconnecting Docker alone will not clear this protection."
 		: "Orbit could not confirm recovery of the previous worker. If Docker is disconnected, reconnect it and choose Recheck in Status before starting or moving a chat.";
-	const journal = confirmedHostRecovery(state)
-		? state.hostRestartDiagnostic?.journal
+	const diagnostic = confirmedHostRecovery(state)
+		? state.hostRestartDiagnostic
 		: undefined;
+	const journal = diagnostic?.journal;
+	const receipt =
+		diagnostic && "readinessReceipt" in diagnostic
+			? diagnostic.readinessReceipt
+			: undefined;
 	const detail =
 		journal &&
 		{
@@ -44,6 +49,20 @@ function RecoveryNotice({ state }: Readonly<{ state: Snapshot }>) {
 		<output className="recovery-notice">
 			{message}
 			{detail && <> {detail} Workspace changes have not been verified.</>}
+			{receipt === "approval-matched" && (
+				<>
+					{" "}
+					The saved readiness probe report matches the original approval. New
+					runs remain blocked.
+				</>
+			)}
+			{receipt === "unverified" && (
+				<>
+					{" "}
+					The saved readiness probe report could not be matched to a pending
+					approval.
+				</>
+			)}
 		</output>
 	);
 }

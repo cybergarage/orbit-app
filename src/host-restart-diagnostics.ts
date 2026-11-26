@@ -1,8 +1,58 @@
 import { hostOriginator, hostRepository } from "./host-core";
-import type { HostRestartDiagnostic, Snapshot } from "./types";
+import type {
+	HostRecoveryIdentity,
+	HostRestartDiagnostic,
+	Snapshot,
+} from "./types";
 
 const ownerName = /^orbit-app-[a-f0-9-]{36}$/;
 const imageId = /^sha256:[a-f0-9]{64}$/;
+const hexId = /^[a-f0-9]{64}$/;
+
+function scopedReadinessReceipt(
+	active: NonNullable<Snapshot["active"]>,
+	saved: HostRecoveryIdentity,
+) {
+	const receipt = active.hostReadinessReceipt;
+	if (
+		receipt?.version !== 1 ||
+		receipt.outcome !== "fixed-probe-exited-zero" ||
+		active.workspaceReadiness !== true ||
+		receipt.sessionId !== active.sessionId ||
+		receipt.storagePairId !== saved.storagePairId ||
+		receipt.orbitRunId !== saved.orbitRunId ||
+		receipt.executorOwner !== saved.executorOwner ||
+		receipt.image !== saved.readinessImage ||
+		typeof receipt.containerId !== "string" ||
+		!hexId.test(receipt.containerId) ||
+		!receipt.approval ||
+		!Array.isArray(active.hostApprovalAttempts)
+	)
+		return undefined;
+
+	const { approvalId, digest, operationId } = receipt.approval;
+	const attempts = active.hostApprovalAttempts.filter(
+		(attempt) =>
+			attempt?.approvalId === approvalId ||
+			attempt?.operationId === operationId,
+	);
+	const [attempt] = attempts;
+	if (
+		attempts.length !== 1 ||
+		attempt?.approvalId !== approvalId ||
+		attempt?.operationId !== operationId ||
+		attempt?.digest !== digest
+	)
+		return undefined;
+	return {
+		pairId: receipt.storagePairId,
+		sessionId: receipt.sessionId,
+		runId: receipt.orbitRunId,
+		approvalId,
+		digest,
+		operationId,
+	};
+}
 
 /** Observation only. Does not acquire a writer, verify effects or grant recovery. */
 export async function inspectHostRestart(
@@ -35,7 +85,9 @@ export async function inspectHostRestart(
 			return unverified;
 		const scope = repo.scope(active.sessionId);
 		if (scope.pairId !== saved.storagePairId) return unverified;
-		const { inspectRestartRun } = await import("@cybergarage/orbit");
+		const { inspectRestartRun, verifyRestartCommandApproval } = await import(
+			"@cybergarage/orbit"
+		);
 		const report = inspectRestartRun(scope, saved.orbitRunId);
 		if (
 			report.pairId !== saved.storagePairId ||
@@ -46,7 +98,16 @@ export async function inspectHostRestart(
 			return unverified;
 		if (report.journal !== "open" && report.journal !== "terminal-recorded")
 			return { journal: report.journal };
+		// Absence remains distinct from a retained receipt which could not be matched.
+		const binding = scopedReadinessReceipt(active, saved);
+		const receiptStatus =
+			binding && verifyRestartCommandApproval(scope, binding) === "matched"
+				? "approval-matched"
+				: "unverified";
 		return {
+			...(active.hostReadinessReceipt !== undefined
+				? { readinessReceipt: receiptStatus }
+				: {}),
 			journal: report.journal,
 			unresolvedOperations: report.unresolvedOperationIds.length,
 		};

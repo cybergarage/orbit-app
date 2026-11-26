@@ -413,6 +413,54 @@ async function hostReadinessScenario(
 			},
 			async recordReadinessReceipt(receipt) {
 				receipts.push(receipt);
+				const active = {
+					projectId: randomUUID(),
+					sessionId: f.sessionId,
+					runtime: "host-v1" as const,
+					readerOwner: run.name,
+					workspaceReadiness: true,
+					hostRecovery: recovery,
+					hostReadinessReceipt: receipt,
+					hostApprovalAttempts: [receipt.approval],
+				};
+				const expected = { journal: "open", unresolvedOperations: 1 };
+				const valid = await inspectHostRestart(active, f);
+				assert.deepEqual(valid, {
+					...expected,
+					readinessReceipt: "approval-matched",
+				});
+				for (const change of [
+					{
+						hostReadinessReceipt: {
+							...receipt,
+							image: `sha256:${"a".repeat(64)}`,
+						},
+					},
+					{ hostReadinessReceipt: { ...receipt, containerId: "invalid" } },
+					{ hostReadinessReceipt: { ...receipt, storagePairId: randomUUID() } },
+					{ hostReadinessReceipt: { ...receipt, orbitRunId: randomUUID() } },
+					{
+						hostReadinessReceipt: {
+							...receipt,
+							executorOwner: `orbit-app-${randomUUID()}`,
+						},
+					},
+					{ hostApprovalAttempts: [receipt.approval, receipt.approval] },
+					{ hostApprovalAttempts: [] },
+					(() => {
+						// Even agreeing App records cannot substitute for the Core grant.
+						const approval = { ...receipt.approval, digest: "a".repeat(64) };
+						return {
+							hostApprovalAttempts: [approval],
+							hostReadinessReceipt: { ...receipt, approval },
+						};
+					})(),
+				]) {
+					assert.deepEqual(
+						await inspectHostRestart({ ...active, ...change }, f),
+						{ ...expected, readinessReceipt: "unverified" },
+					);
+				}
 			},
 		},
 		(event) => {

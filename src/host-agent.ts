@@ -13,7 +13,11 @@ import type {
 	WorkspaceCommandAdapter,
 	WorkspaceCommandOutcome,
 } from "@cybergarage/orbit";
-import type { HostApprovalAttempt, HostRecoveryIdentity } from "./types";
+import type {
+	HostApprovalAttempt,
+	HostReadinessReceipt,
+	HostRecoveryIdentity,
+} from "./types";
 import { hostOriginator, hostRepository } from "./host-core";
 import {
 	admitWorkspaceReaderImage,
@@ -137,6 +141,7 @@ interface HostRunConfig {
 	projectContext?: ProjectContextSnapshot;
 	recordRecoveryIdentity?: (identity: HostRecoveryIdentity) => Promise<void>;
 	recordApprovalAttempt?: (attempt: HostApprovalAttempt) => Promise<void>;
+	recordReadinessReceipt?: (receipt: HostReadinessReceipt) => Promise<void>;
 }
 type ProviderRequest = (
 	route: string,
@@ -203,6 +208,7 @@ export class HostAgentRun {
 	private readinessUsed = false;
 	private dockerCleanupChecked = false;
 	private approval?: HostApproval;
+	private readinessApproval?: HostApprovalAttempt;
 	private readerBlocked = false;
 	private readerTail = Promise.resolve();
 	private toolCalls = 0;
@@ -239,15 +245,24 @@ export class HostAgentRun {
 		)
 			throw new Error("Approval is no longer pending");
 		this.approval = undefined;
-		if (approve && this.config.recordApprovalAttempt) {
-			// The durable host attempt is not a Core grant or a receipt.
-			await this.config.recordApprovalAttempt({
+		if (approve) {
+			const attempt = {
 				approvalId: request.id,
 				operationId: request.operationId,
 				digest: request.digest,
-			});
+			};
+			// The durable host attempt is not a Core grant or a receipt.
+			await this.config.recordApprovalAttempt?.(attempt);
 			if (this.controller.signal.aborted || request.expiresAt <= Date.now())
 				throw new Error("Approval expired or was cancelled before dispatch");
+			if (
+				request.preview.name === "bash" &&
+				readinessInput({
+					command: request.preview.command,
+					timeoutSeconds: request.preview.timeoutSeconds,
+				})
+			)
+				this.readinessApproval = attempt;
 		}
 		await this.agent.replyApproval(request.runId, {
 			requestId: request.id,
@@ -319,12 +334,45 @@ export class HostAgentRun {
 							(await identity(this.workspace)) !== before
 						)
 							return { status: "unknown" };
+						const record = this.config.recordReadinessReceipt;
+						const approval = this.readinessApproval;
+						let recordExit: ((id: string) => Promise<void>) | undefined;
+						if (record) {
+							if (!approval) return { status: "unknown" };
+							const { inspectRestartRun } = await import("@cybergarage/orbit");
+							const repo = await hostRepository(this.core);
+							const scope = repo.scope(this.config.sessionId);
+							const observation = inspectRestartRun(scope, this.orbitRunId);
+							if (
+								signal.aborted ||
+								observation.journal !== "open" ||
+								!observation.writerRetained ||
+								observation.unresolvedOperationIds.length !== 1 ||
+								observation.unresolvedOperationIds[0] !== approval.operationId
+							)
+								return { status: "unknown" };
+							recordExit = async (containerId) => {
+								signal.throwIfAborted();
+								await record({
+									version: 1,
+									storagePairId: scope.pairId,
+									sessionId: this.config.sessionId,
+									orbitRunId: this.orbitRunId,
+									executorOwner: this.name,
+									image: artifact,
+									containerId,
+									approval,
+									outcome: "fixed-probe-exited-zero",
+								});
+							};
+						}
 						return probe.execute(
 							this.name,
 							this.workspace,
 							artifact,
 							op,
 							signal,
+							recordExit,
 						);
 					},
 				);

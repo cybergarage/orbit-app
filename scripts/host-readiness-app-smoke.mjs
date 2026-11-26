@@ -170,12 +170,35 @@ async function exerciseDecision(page, provider, env, base, imageId, approve) {
 		true,
 	);
 
+	let observed = false;
+	provider.beforeReply(async () => {
+		const state = await readRegistry(base);
+		const { active } = state;
+		if (!approve) {
+			assert.equal(active.hostReadinessReceipt, undefined);
+		} else {
+			const receipt = active.hostReadinessReceipt;
+			assert.equal(receipt.outcome, "fixed-probe-exited-zero");
+			assert.equal(receipt.executorOwner, owner);
+			assert.equal(receipt.image, imageId);
+			assert.equal(receipt.storagePairId, active.hostRecovery.storagePairId);
+			assert.equal(receipt.orbitRunId, active.hostRecovery.orbitRunId);
+			assert.equal(receipt.sessionId, active.sessionId);
+			assert.deepEqual(active.hostApprovalAttempts, [receipt.approval]);
+			assert.match(receipt.containerId, /^[a-f0-9]{64}$/);
+		}
+		assert.equal((await snapshot(page)).active.hostReadinessReceipt, undefined);
+		observed = true;
+	});
+
 	await page
 		.getByRole("button", { name: approve ? "Approve" : "Deny", exact: true })
 		.click();
 	await waitIdle(page);
 	await expect(preview).toBeHidden();
+	provider.beforeReply(undefined);
 	provider.verify();
+	assert.ok(observed, "Synthetic follow-up checked the persisted registry");
 	assert.equal(provider.requests.length, offset + 2);
 	const result = provider.requests
 		.at(-1)
@@ -408,6 +431,92 @@ async function confirmTestDisplay(app, phase) {
 	console.log(`Packaged Orbit App: verified display ${label} (${phase}).`);
 }
 
+async function readRegistry(base) {
+	return JSON.parse(
+		await fs.readFile(
+			path.join(`${base}-host-agent-native-v2`, "registry", "state.json"),
+			"utf8",
+		),
+	);
+}
+
+async function killFixtureApp(app) {
+	const process = app.process();
+	const exited = once(process, "exit", {
+		signal: AbortSignal.timeout(5_000),
+	});
+	assert.ok(
+		process.kill("SIGKILL"),
+		"Stop only this synthetic Electron instance",
+	);
+	const [, signal] = await exited;
+	assert.equal(signal, "SIGKILL");
+}
+
+async function exerciseRestartAfterReceipt(
+	executablePath,
+	base,
+	port,
+	env,
+	provider,
+	imageId,
+) {
+	await fs.mkdir(base, { mode: 0o700 });
+	let app = await launch(executablePath, base, port, env, true);
+	let finishReply;
+	const pending = new Promise((resolve) => {
+		finishReply = resolve;
+	});
+	try {
+		const page = await app.firstWindow();
+		await confirmTestDisplay(app, "before interruption after receipt");
+		const { chat, owner, offset } = await prepareDecision(
+			page,
+			provider,
+			env,
+			base,
+			imageId,
+			true,
+		);
+		let record;
+		provider.beforeReply(async () => {
+			record = (await readRegistry(base)).active.hostReadinessReceipt;
+			if (record) await pending;
+		});
+		await page.getByRole("button", { name: "Approve", exact: true }).click();
+		await expect.poll(() => record?.outcome).toBe("fixed-probe-exited-zero");
+		assert.equal(record.executorOwner, owner);
+		await assertOneCompletedProbe(env, owner);
+		assert.equal(provider.requests.length, offset + 2);
+		await killFixtureApp(app);
+		app = undefined;
+		provider.beforeReply(undefined);
+		finishReply();
+		assert.deepEqual(
+			(await readRegistry(base)).active.hostReadinessReceipt,
+			record,
+		);
+		app = await launch(executablePath, base, port, env, true, false);
+		const reopened = await app.firstWindow();
+		await confirmTestDisplay(app, "after relaunch with receipt");
+		await assertRetainedRecovery(reopened, chat, owner);
+		assert.deepEqual(
+			(await readRegistry(base)).active.hostReadinessReceipt,
+			record,
+		);
+		assert.equal(
+			(await snapshot(reopened)).active.hostReadinessReceipt,
+			undefined,
+		);
+		provider.verify();
+		assert.equal(provider.requests.length, offset + 2);
+	} finally {
+		provider.beforeReply(undefined);
+		finishReply();
+		await app?.close();
+	}
+}
+
 async function exerciseRestart(
 	executablePath,
 	base,
@@ -449,16 +558,7 @@ async function exerciseRestart(
 			".coordination",
 			`${active.sessionId}.owner`,
 		);
-		const process = app.process();
-		const exited = once(process, "exit", {
-			signal: AbortSignal.timeout(5_000),
-		});
-		assert.ok(
-			process.kill("SIGKILL"),
-			"Stop only this synthetic Electron instance",
-		);
-		const [, signal] = await exited;
-		assert.equal(signal, "SIGKILL");
+		await killFixtureApp(app);
 		app = undefined;
 		assert.equal(await waitProbeRunning(env, owner), child);
 		const [journalBefore, ownerBefore] = await Promise.all([
@@ -466,6 +566,15 @@ async function exerciseRestart(
 			fs.stat(ownerEvidence),
 		]);
 		assert.match(journalBefore.toString("utf8"), /"kind":"operation-intent"/);
+		assert.equal(
+			JSON.parse(
+				await fs.readFile(
+					path.join(`${base}-host-agent-native-v2`, "registry", "state.json"),
+					"utf8",
+				),
+			).active.hostReadinessReceipt,
+			undefined,
+		);
 
 		app = await launch(executablePath, base, port, env, true, false);
 		const reopened = await app.firstWindow();
@@ -484,6 +593,7 @@ async function exerciseRestart(
 		);
 		for (const observation of [state, await snapshot(reopened)]) {
 			assert.deepEqual(observation.active.hostRecovery, saved);
+			assert.equal(observation.active.hostReadinessReceipt, undefined);
 			assert.deepEqual(observation.hostRestartDiagnostic, {
 				journal: "open",
 				unresolvedOperations: 1,
@@ -598,6 +708,14 @@ export async function verifyPackagedWorkspaceReadiness(
 			);
 		await decision("denied", false);
 		await decision("approved", true);
+		await exerciseRestartAfterReceipt(
+			executablePath,
+			path.join(scratch, "restart-with-receipt"),
+			address.port,
+			env,
+			provider,
+			productionId,
+		);
 		await inProfile("stop-pending", (page) =>
 			exerciseCancellation(
 				page,

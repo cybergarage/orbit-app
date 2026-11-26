@@ -297,6 +297,7 @@ export class Supervisor {
 	}
 	private snapshot() {
 		const state = structuredClone(this.store.state);
+		if (state.active) delete state.active.hostReadinessReceipt;
 		if (this.recoveryBlockReason)
 			state.recoveryBlockReason = this.recoveryBlockReason;
 		else delete state.recoveryBlockReason;
@@ -587,6 +588,32 @@ export class Supervisor {
 									);
 								active.hostApprovalAttempts ??= [];
 								active.hostApprovalAttempts.push(attempt);
+								await this.publish();
+							},
+							recordReadinessReceipt: async (receipt) => {
+								const identity = active.hostRecovery;
+								const attempts = active.hostApprovalAttempts?.filter(
+									(attempt) =>
+										attempt.operationId === receipt.approval.operationId &&
+										attempt.approvalId === receipt.approval.approvalId &&
+										attempt.digest === receipt.approval.digest,
+								);
+								if (
+									this.store.state.active !== active ||
+									active.workspaceReadiness !== true ||
+									active.hostReadinessReceipt ||
+									receipt.sessionId !== active.sessionId ||
+									receipt.orbitRunId !== identity?.orbitRunId ||
+									receipt.storagePairId !== identity?.storagePairId ||
+									receipt.executorOwner !== identity?.executorOwner ||
+									receipt.image !== identity?.readinessImage ||
+									!/^[0-9a-f]{64}$/.test(receipt.containerId) ||
+									attempts?.length !== 1
+								)
+									throw new Error(
+										"Readiness receipt does not match the active Host run",
+									);
+								active.hostReadinessReceipt = receipt;
 								await this.publish();
 							},
 						},

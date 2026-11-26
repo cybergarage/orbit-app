@@ -11,7 +11,11 @@ import {
 	type HostWriter,
 } from "../src/host-agent";
 import { inspectHostRestart } from "../src/host-restart-diagnostics";
-import type { HostApprovalAttempt, HostRecoveryIdentity } from "../src/types";
+import type {
+	HostApprovalAttempt,
+	HostReadinessReceipt,
+	HostRecoveryIdentity,
+} from "../src/types";
 import { command, dockerPath } from "../src/worker";
 import {
 	HostCoreNames,
@@ -391,6 +395,7 @@ async function hostReadinessScenario(
 	const events: any[] = [];
 	const artifact = await probe.admit();
 	let recovery: HostRecoveryIdentity | undefined;
+	const receipts: HostReadinessReceipt[] = [];
 	let duringDispatch:
 		| Awaited<ReturnType<typeof inspectHostRestart>>
 		| undefined;
@@ -405,6 +410,9 @@ async function hostReadinessScenario(
 			prompt: "Synthetic fixed readiness probe only.",
 			async recordRecoveryIdentity(identity) {
 				recovery = identity;
+			},
+			async recordReadinessReceipt(receipt) {
+				receipts.push(receipt);
 			},
 		},
 		(event) => {
@@ -470,6 +478,19 @@ async function hostReadinessScenario(
 	assert.match(preview.execution, /fixed Docker readiness probe/i);
 	assert.deepEqual(await fs.readdir(f.workspace), []);
 	if (mode === "approve") {
+		assert.equal(receipts.length, 1);
+		const [receipt] = receipts;
+		assert.equal(receipt.sessionId, f.sessionId);
+		assert.equal(receipt.orbitRunId, recovery?.orbitRunId);
+		assert.equal(receipt.storagePairId, recovery?.storagePairId);
+		assert.equal(receipt.executorOwner, run.name);
+		assert.equal(receipt.image, artifact);
+		assert.match(receipt.containerId, /^[0-9a-f]{64}$/);
+		assert.deepEqual(receipt.approval, {
+			approvalId: approvals[0].id,
+			operationId: approvals[0].operationId,
+			digest: approvals[0].digest,
+		});
 		assert.deepEqual(duringDispatch, {
 			journal: "open",
 			unresolvedOperations: 1,
@@ -479,6 +500,8 @@ async function hostReadinessScenario(
 			events.find((e) => e.type === "result")?.data?.runtime?.outcome,
 			"completed",
 		);
+	} else {
+		assert.deepEqual(receipts, []);
 	}
 }
 
@@ -491,8 +514,16 @@ test("Host Core asks only for the exact readiness probe; denial and post-approva
 			{
 				admit: async () => image,
 				revalidate: async (selected) => selected === image && mode !== "drift",
-				execute: async () => {
+				execute: async (
+					_parent,
+					_workspace,
+					_image,
+					_op,
+					_signal,
+					recordExit,
+				) => {
 					executions++;
+					await recordExit?.("e".repeat(64));
 					return {
 						status: "exited",
 						exitCode: 0,
@@ -622,6 +653,73 @@ test("fixed readiness transport rejects changed bindings and never removes a for
 		stopWorkspaceReadiness("invalid-owner", transport),
 		/Invalid readiness owner/,
 	);
+});
+
+test("readiness records an exact exited child before removal and never treats receipt failure as a result", async () => {
+	const image = `sha256:${"d".repeat(64)}`;
+	const parent = `orbit-app-${randomUUID()}`;
+	const workspace = path.resolve(os.tmpdir(), "synthetic-workspace");
+	const id = "e".repeat(64);
+	const profile = readinessProfile(image);
+	const op = {
+		name: "bash",
+		effect: "command",
+		version: 1,
+		cwd: workspace,
+		target: workspace,
+		timeoutMs: profile.timeoutMs,
+		profile,
+		input: { command: readinessCommand, timeoutSeconds: 12 },
+	} as const;
+	for (const mode of ["valid", "wrong-image", "save-error"] as const) {
+		const steps: string[] = [];
+		let alive = false;
+		const probe = createDockerHostCommandProbe(
+			"unused",
+			async (_exe, args) => {
+				if (args[0] === "ps") return alive ? id : "";
+				if (args[0] === "inspect" && args.at(-1) === id) return parent;
+				if (args[0] === "inspect") {
+					assert.ok(alive);
+					const pin =
+						mode === "wrong-image" ? `sha256:${"f".repeat(64)}` : image;
+					return `${id} ${pin} exited 0 ${parent}`;
+				}
+				assert.deepEqual(args, ["rm", "-f", id]);
+				steps.push("remove");
+				alive = false;
+				return id;
+			},
+			async (_exe, args) => {
+				assert.ok(!args.includes("--rm"));
+				alive = true;
+				steps.push("run");
+				return JSON.stringify({
+					exitCode: 0,
+					stdout: "workspace command ready\n",
+				});
+			},
+		);
+		const result = await probe.execute(
+			parent,
+			workspace,
+			image,
+			op,
+			new AbortController().signal,
+			async (seen) => {
+				assert.equal(seen, id);
+				assert.ok(alive);
+				steps.push("save");
+				if (mode === "save-error")
+					throw new Error("Synthetic receipt persistence failure");
+			},
+		);
+		assert.deepEqual(
+			steps,
+			mode === "wrong-image" ? ["run", "remove"] : ["run", "save", "remove"],
+		);
+		assert.equal(result.status, mode === "valid" ? "exited" : "unknown");
+	}
 });
 
 test("real Docker Host readiness cancellation stops its owned child without replay", {

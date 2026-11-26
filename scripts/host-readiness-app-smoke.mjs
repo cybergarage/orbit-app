@@ -222,6 +222,9 @@ function launch(executablePath, base, port, env, host, readiness = true) {
 		executablePath,
 		env: {
 			...fixtureAppEnv(env, base, port, host),
+			...(process.env.ORBIT_APP_TEST_DISPLAY
+				? { ORBIT_APP_TEST_DISPLAY: process.env.ORBIT_APP_TEST_DISPLAY }
+				: {}),
 			ORBIT_APP_HOST_AGENT_READINESS_PROBE: readiness ? "1" : "0",
 		},
 		timeout: 25_000,
@@ -413,14 +416,10 @@ async function confirmTestDisplay(app, phase) {
 			throw new Error("Expected one visible fixture window");
 		const [window] = windows;
 		const bounds = window.getBounds();
-		const { x, y, width, height } = display.workArea;
-		window.setPosition(
-			x + Math.floor((width - bounds.width) / 2),
-			y + Math.floor((height - bounds.height) / 2),
-		);
+
 		return {
 			expected: display.id,
-			actual: screen.getDisplayMatching(window.getBounds()).id,
+			actual: screen.getDisplayMatching(bounds).id,
 		};
 	}, label);
 	assert.equal(
@@ -588,7 +587,7 @@ async function exerciseRestartBeforeResult(
 		const notice = reopened.locator(".recovery-notice");
 		await expect(notice).toContainText(
 			conflicting
-				? "The saved readiness probe report could not be matched to a pending approval."
+				? "The saved readiness probe report could not be verified."
 				: "The saved readiness probe report matches the original approval.",
 		);
 		assert.equal(
@@ -714,15 +713,19 @@ async function exerciseRestartAfterReceipt(
 		);
 		const resumed = await snapshot(reopened);
 		assert.equal(resumed.active.hostReadinessReceipt, undefined);
-		// The provider was already called again, so Core recorded the tool result
-		// before interruption. The retained receipt cannot match a pending intent.
+		// The provider already received the result and Core's exact operation
+		// binding must be verified independently of the observation in the fixture.
 		assert.deepEqual(resumed.hostRestartDiagnostic, {
 			journal: "open",
 			unresolvedOperations: 0,
-			readinessReceipt: "unverified",
+			readinessReceipt: "result-recorded",
 		});
 		await expect(reopened.locator(".recovery-notice")).toContainText(
-			"The saved readiness probe report could not be matched to a pending approval.",
+			"Core recorded a successful result for the matched readiness probe.",
+		);
+		await reopened.getByRole("button", { name: "Debug", exact: true }).click();
+		await expect(reopened.locator(".restart-evidence-log")).toContainText(
+			"Core recorded a successful result for the matched readiness probe.",
 		);
 		assert.deepEqual(await fs.readFile(journal), journalBefore);
 		assert.deepEqual(await fs.readFile(writer), writerBefore);

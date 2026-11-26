@@ -24,6 +24,23 @@ function confirmedHostRecovery(state: Snapshot) {
 		state.recoveryBlockReason === "host-writer-retained"
 	);
 }
+function readinessReceiptStatus(state: Snapshot) {
+	const diagnostic = confirmedHostRecovery(state)
+		? state.hostRestartDiagnostic
+		: undefined;
+	return diagnostic && "readinessReceipt" in diagnostic
+		? diagnostic.readinessReceipt
+		: undefined;
+}
+
+const readinessEvidenceCopy = {
+	"approval-matched":
+		"The saved readiness probe report matches the original approval.",
+	"result-recorded":
+		"Core recorded a successful result for the matched readiness probe.",
+	unverified: "The saved readiness probe report could not be verified.",
+} as const;
+
 function RecoveryNotice({ state }: Readonly<{ state: Snapshot }>) {
 	if (!state.recoveryBlocked) return null;
 	const message = confirmedHostRecovery(state)
@@ -33,10 +50,7 @@ function RecoveryNotice({ state }: Readonly<{ state: Snapshot }>) {
 		? state.hostRestartDiagnostic
 		: undefined;
 	const journal = diagnostic?.journal;
-	const receipt =
-		diagnostic && "readinessReceipt" in diagnostic
-			? diagnostic.readinessReceipt
-			: undefined;
+	const receipt = readinessReceiptStatus(state);
 	const detail =
 		journal &&
 		{
@@ -49,23 +63,21 @@ function RecoveryNotice({ state }: Readonly<{ state: Snapshot }>) {
 		<output className="recovery-notice">
 			{message}
 			{detail && <> {detail} Workspace changes have not been verified.</>}
-			{receipt === "approval-matched" && (
-				<>
-					{" "}
-					The saved readiness probe report matches the original approval. New
-					runs remain blocked.
-				</>
-			)}
-			{receipt === "unverified" && (
-				<>
-					{" "}
-					The saved readiness probe report could not be matched to a pending
-					approval.
-				</>
-			)}
+			{receipt && <> {readinessEvidenceCopy[receipt]}</>}
 		</output>
 	);
 }
+function RestartEvidenceLog({ state }: Readonly<{ state: Snapshot }>) {
+	const receipt = readinessReceiptStatus(state);
+	if (!receipt) return null;
+	return (
+		<p className="restart-evidence-log">
+			{readinessEvidenceCopy[receipt]} New runs remain blocked. Workspace
+			changes have not been verified.
+		</p>
+	);
+}
+
 function NativeDialog({
 	children,
 	label,
@@ -823,6 +835,10 @@ function App() {
 										</div>
 										<p>Current chat · {session.name}</p>
 										<small>EVENT LOG</small>
+										{state?.active?.sessionId === session.id &&
+											state.active.projectId === project?.id && (
+												<RestartEvidenceLog state={state} />
+											)}
 										<div className="debug-events">
 											<Events events={session.events} raw />
 										</div>

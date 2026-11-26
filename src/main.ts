@@ -1,5 +1,12 @@
 import { installBackgroundWindows } from "./background-windows";
-import { app, BrowserWindow, ipcMain, dialog, nativeTheme } from "electron";
+import {
+	app,
+	BrowserWindow,
+	ipcMain,
+	dialog,
+	nativeTheme,
+	screen,
+} from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Supervisor } from "./supervisor";
@@ -41,6 +48,31 @@ if (!profileOwned) {
 	else app.quit();
 }
 const entry = path.join(__dirname, "index.html");
+// A synthetic packaged launch may name a display. Resolve it before creating
+// a visible window and never fall back to another screen.
+function fixtureWindowPlacement() {
+	const label = testMode ? process.env.ORBIT_APP_TEST_DISPLAY : undefined;
+	if (!label) return undefined;
+	const displays = screen
+		.getAllDisplays()
+		.filter((display) => display.label === label);
+	if (displays.length !== 1)
+		throw new Error(`Expected one active display named ${label}`);
+	const { id, workArea } = displays[0];
+	const width = Math.min(1250, workArea.width);
+	const height = Math.min(840, workArea.height);
+	if (width < 900 || height < 620)
+		throw new Error("Fixture display is too small");
+	return {
+		id,
+		bounds: {
+			x: workArea.x + Math.floor((workArea.width - width) / 2),
+			y: workArea.y + Math.floor((workArea.height - height) / 2),
+			width,
+			height,
+		},
+	};
+}
 async function openWindow() {
 	if (!supervisor || closing) return;
 	if (window && !window.isDestroyed()) {
@@ -48,11 +80,13 @@ async function openWindow() {
 		window.focus();
 		return;
 	}
+	const placement = fixtureWindowPlacement();
 	window = new BrowserWindow({
 		width: 1250,
 		height: 840,
 		minWidth: 900,
 		minHeight: 620,
+		...(placement ? { ...placement.bounds, show: false } : {}),
 		title: "Orbit App",
 		backgroundColor: nativeTheme.shouldUseDarkColors ? "#1d211f" : "#faf9f6",
 		webPreferences: {
@@ -66,6 +100,17 @@ async function openWindow() {
 	window.webContents.on("will-navigate", (e) => e.preventDefault());
 
 	await window.loadFile(entry);
+	if (placement) {
+		const current = fixtureWindowPlacement();
+		if (
+			current?.id !== placement.id ||
+			screen.getDisplayMatching(window.getBounds()).id !== placement.id
+		) {
+			window.destroy();
+			throw new Error("Fixture window is not on the selected display");
+		}
+		window.show();
+	}
 }
 installBackgroundWindows(
 	app,

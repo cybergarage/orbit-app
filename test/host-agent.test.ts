@@ -396,6 +396,17 @@ async function hostReadinessScenario(
 	const artifact = await probe.admit();
 	let recovery: HostRecoveryIdentity | undefined;
 	const receipts: HostReadinessReceipt[] = [];
+	let matchedAfterResult = false;
+	const activeFor = (receipt: HostReadinessReceipt) => ({
+		projectId: randomUUID(),
+		sessionId: f.sessionId,
+		runtime: "host-v1" as const,
+		readerOwner: receipt.executorOwner,
+		workspaceReadiness: true,
+		hostRecovery: recovery,
+		hostReadinessReceipt: receipt,
+		hostApprovalAttempts: [receipt.approval],
+	});
 	let duringDispatch:
 		| Awaited<ReturnType<typeof inspectHostRestart>>
 		| undefined;
@@ -413,16 +424,7 @@ async function hostReadinessScenario(
 			},
 			async recordReadinessReceipt(receipt) {
 				receipts.push(receipt);
-				const active = {
-					projectId: randomUUID(),
-					sessionId: f.sessionId,
-					runtime: "host-v1" as const,
-					readerOwner: run.name,
-					workspaceReadiness: true,
-					hostRecovery: recovery,
-					hostReadinessReceipt: receipt,
-					hostApprovalAttempts: [receipt.approval],
-				};
+				const active = activeFor(receipt);
 				const expected = { journal: "open", unresolvedOperations: 1 };
 				const valid = await inspectHostRestart(active, f);
 				assert.deepEqual(valid, {
@@ -473,6 +475,15 @@ async function hostReadinessScenario(
 		},
 		async (_route, body) => {
 			requests.push(body);
+			if (mode === "approve" && receipts.length === 1 && !matchedAfterResult) {
+				const active = activeFor(receipts[0]);
+				assert.deepEqual(await inspectHostRestart(active, f), {
+					journal: "open",
+					unresolvedOperations: 0,
+					readinessReceipt: "result-recorded",
+				});
+				matchedAfterResult = true;
+			}
 			if (requests.length === 1)
 				return completion("bash", {
 					command: "printf 'different harmless text'",
@@ -510,6 +521,8 @@ async function hostReadinessScenario(
 	);
 	await run.start();
 	await Promise.all(replies);
+	if (mode === "approve" && receipts.length)
+		assert.equal(matchedAfterResult, true);
 	await run.confirmGone();
 	assert.deepEqual(
 		requests[0].tools.map((tool: any) => tool.function.name).sort(),

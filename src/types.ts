@@ -102,7 +102,7 @@ export type HostRestartDiagnostic =
 	| {
 			journal: "open" | "terminal-recorded";
 			unresolvedOperations: number;
-			readinessReceipt?: "approval-matched" | "unverified";
+			readinessReceipt?: "approval-matched" | "result-recorded" | "unverified";
 	  };
 export interface Snapshot {
 	defaultModel?: { model: string; provider: string };

@@ -100,6 +100,25 @@ effect. An interrupted command can remain unknown even after teardown.
 Reject unsupported, incomplete, conflicting, or moved-scope evidence rather
 than upgrading it to a completed operation.
 
+### First evidence milestone: review only
+
+Start with the fixed, read-only readiness probe. Its scope is narrower than
+arbitrary shell, file writes, edits, or Git. It may establish whether the
+specific approved probe ran; it cannot establish the state of workspace files.
+
+| Evidence | What it establishes |
+| --- | --- |
+| App approval attempt plus the matching Core approval and intent | The exact operation was approved and prepared. An attempt alone proves neither dispatch nor completion. |
+| Durable executor receipt bound to that same operation | Only the outcome recorded by that exact executor boundary. A stopped container, successful cleanup, or the existence of a Core end record is not a substitute. |
+| Missing, malformed, duplicated or contradictory records, or a scope mismatch | Show the outcome as unknown. Do not assume the operation ran or did not run. |
+
+Core should verify the original approval and operation binding. The executor
+should attest only facts it saw and persist those facts before its ephemeral
+child is removed. The App should show a coarse status without exposing approval
+digests, operation identifiers, or raw output. Repeated inspection must remain
+read-only and must neither replay the operation nor release the writer. Do not
+reuse readiness evidence to reconcile a file edit or an unrestricted command.
+
 Before considering a write-capable recovery transition, specify reviewed
 evidence for each permitted effect and require Core to revalidate under
 exclusive ownership. A future transition should retain the original terminal

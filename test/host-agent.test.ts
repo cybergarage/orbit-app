@@ -100,7 +100,7 @@ function completion(name?: string, args?: unknown) {
 	};
 }
 
-test("restart inspection stays scoped to the saved run and never releases the writer", async (t) => {
+test("restart inspection rejects mismatched or incomplete evidence without changing it", async (t) => {
 	const f = await fixture(t);
 	const repo = await hostRepository(f.core);
 	const artifact = `sha256:${"c".repeat(64)}`;
@@ -192,7 +192,43 @@ test("restart inspection stays scoped to the saved run and never releases the wr
 		await inspectHostRestart(active, { ...f, workspace: f.core }),
 		{ journal: "unverified" },
 	);
+	type Active = Parameters<typeof inspectHostRestart>[0];
+	const mismatches: [string, Active][] = [
+		["different session", { ...active, sessionId: randomUUID() }],
+		["legacy container", { ...active, containerName: "synthetic-container" }],
+		["missing saved identity", { ...active, hostRecovery: undefined }],
+		[
+			"invalid reader pin",
+			{
+				...active,
+				hostRecovery: { ...recovery, readerImage: "reader:latest" },
+			},
+		],
+		[
+			"readiness enabled without a pin",
+			{ ...active, workspaceReadiness: true },
+		],
+		[
+			"writer pin without workspace mutations",
+			{ ...active, hostRecovery: { ...recovery, writerImage: artifact } },
+		],
+	];
+	for (const [scenario, snapshot] of mismatches) {
+		assert.deepEqual(
+			await inspectHostRestart(snapshot, f),
+			{ journal: "unverified" },
+			scenario,
+		);
+	}
 	assert.deepEqual(await fs.readFile(journal), bytes);
+
+	// Simulate a torn append after a terminal record in this disposable run.
+	await fs.appendFile(journal, '{"kind":');
+	const torn = await fs.readFile(journal);
+	assert.deepEqual(await inspectHostRestart(active, f), {
+		journal: "unverified",
+	});
+	assert.deepEqual(await fs.readFile(journal), torn);
 	assert.equal(await fs.readFile(guard, "utf8"), "synthetic retained guard");
 });
 

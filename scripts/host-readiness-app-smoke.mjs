@@ -149,7 +149,26 @@ async function assertSharedWorkspaceBlocked(page, chat, env) {
 		}),
 		/A worker is already active/,
 	);
+	const schedule = await call(page, "schedule", {
+		projectId: chat.projectId,
+		sessionId: second.id,
+		prompt: "Run the scheduled task in the retained workspace.",
+		...model,
+		nextAt: Date.now() + 60_000,
+		intervalMs: 3_600_000,
+	});
+	assert.equal(schedule.enabled, true);
+	const scheduledBefore = await snapshot(page);
+	assert.deepEqual(
+		scheduledBefore.schedules.find(({ id }) => id === schedule.id),
+		schedule,
+	);
+	// Use the production scheduler with a deterministic due time instead of
+	// waiting for the wall-clock timer.
+	await call(page, "tick", { now: schedule.nextAt });
 	const after = await snapshot(page);
+	assert.deepEqual(after.schedules, scheduledBefore.schedules);
+	assert.deepEqual(after.executions, scheduledBefore.executions);
 	assert.deepEqual(after.active, before.active);
 	assert.equal(after.recoveryBlocked, true);
 	assert.deepEqual(after.projects, before.projects);

@@ -402,31 +402,45 @@ async function assertRetainedRecovery(page, chat, owner) {
 async function confirmTestDisplay(app, phase) {
 	const label = process.env.ORBIT_APP_TEST_DISPLAY;
 	if (!label) return;
-	const result = await app.evaluate(({ BrowserWindow, screen }, label) => {
-		const targets = screen
-			.getAllDisplays()
-			.filter((display) => display.label === label);
-		if (targets.length !== 1)
-			throw new Error(`Expected one active display named ${label}`);
-		const [display] = targets;
-		const windows = BrowserWindow.getAllWindows().filter((window) =>
-			window.isVisible(),
-		);
-		if (windows.length !== 1)
-			throw new Error("Expected one visible fixture window");
-		const [window] = windows;
-		const bounds = window.getBounds();
+	const readPlacement = () =>
+		app.evaluate(({ BrowserWindow, screen }, label) => {
+			const targets = screen
+				.getAllDisplays()
+				.filter((display) => display.label === label);
+			if (targets.length !== 1)
+				throw new Error(`Expected one active display named ${label}`);
+			const [display] = targets;
+			const windows = BrowserWindow.getAllWindows().filter((window) =>
+				window.isVisible(),
+			);
+			// firstWindow can resolve while loadFile is still completing and the
+			// display-guarded window has not been shown.
+			if (windows.length === 0) return null;
+			if (windows.length !== 1)
+				throw new Error("Expected one visible fixture window");
+			const [window] = windows;
+			const bounds = window.getBounds();
 
-		return {
-			expected: display.id,
-			actual: screen.getDisplayMatching(bounds).id,
-		};
-	}, label);
-	assert.equal(
-		result.actual,
-		result.expected,
-		`Fixture window placement: ${phase}`,
-	);
+			return {
+				expected: display.id,
+				actual: screen.getDisplayMatching(bounds).id,
+			};
+		}, label);
+	await expect
+		.poll(
+			async () => {
+				const result = await readPlacement();
+				if (!result) return false;
+				assert.equal(
+					result.actual,
+					result.expected,
+					`Fixture window placement: ${phase}`,
+				);
+				return true;
+			},
+			{ timeout: 5_000, message: `Fixture window visible: ${phase}` },
+		)
+		.toBe(true);
 	console.log(`Packaged Orbit App: verified display ${label} (${phase}).`);
 }
 

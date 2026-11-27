@@ -444,16 +444,23 @@ test("schedule occurrence captures admission failures without fabricated answers
 	assert.ok(restored.state.executions?.[0].endedAt);
 });
 
-test("a due schedule for a second chat sharing a recovery-blocked workspace remains pending", async () => {
-	const sup = new Supervisor(
-		await directory(),
-		() => {},
-		() => {
-			assert.fail("Recovery must block worker creation");
-		},
-	);
-	await sup.init();
-	try {
+test("a due schedule for a second chat sharing a recovery-blocked workspace remains pending across restart", async () => {
+	const root = await directory();
+	const open = async () => {
+		const supervisor = new Supervisor(
+			root,
+			() => {},
+			() => {
+				assert.fail("Recovery must block worker creation");
+			},
+		);
+		supervisor.health = async () =>
+			assert.fail("Recovery must block admission");
+		await supervisor.init();
+		return supervisor;
+	};
+
+	const blockSchedule = async (sup: Supervisor) => {
 		const project = await sup.store.createProject("Shared workspace");
 		const original = await sup.store.createSession(project.id);
 		const second = await sup.store.createSession(project.id);
@@ -462,7 +469,6 @@ test("a due schedule for a second chat sharing a recovery-blocked workspace rema
 			await sup.store.executionWorkspace(project.id, second.id),
 			await sup.store.executionWorkspace(project.id, original.id),
 		);
-		sup.health = async () => assert.fail("Recovery must block admission");
 		const schedule = await sup.dispatch("schedule", {
 			projectId: project.id,
 			sessionId: second.id,
@@ -484,8 +490,29 @@ test("a due schedule for a second chat sharing a recovery-blocked workspace rema
 		assert.equal(schedule.enabled, true);
 		await sup.tick(schedule.nextAt);
 		assert.deepEqual(sup.store.state, before);
+		return { active, due: JSON.parse(JSON.stringify(schedule)) };
+	};
+
+	const sup = await open();
+	const { active, due } = await blockSchedule(sup).finally(() => sup.close());
+
+	const reopened = await open();
+	try {
+		assert.equal(reopened.store.state.recoveryBlocked, true);
+		assert.deepEqual(reopened.store.state.active, active);
+		assert.equal(
+			reopened.store.session(active.projectId, active.sessionId).status,
+			"recovery-blocked",
+		);
+		assert.deepEqual(reopened.store.state.schedules, [due]);
+		assert.equal(reopened.store.state.executions?.length ?? 0, 0);
+
+		const before = structuredClone(reopened.store.state);
+		// The held occurrence must not be skipped even after another interval.
+		await reopened.tick(due.nextAt + due.intervalMs);
+		assert.deepEqual(reopened.store.state, before);
 	} finally {
-		await sup.close();
+		await reopened.close();
 	}
 });
 

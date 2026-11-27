@@ -85,7 +85,7 @@ export async function inspectHostRestart(
 			return unverified;
 		const scope = repo.scope(active.sessionId);
 		if (scope.pairId !== saved.storagePairId) return unverified;
-		const { inspectRestartRun, verifyRestartCommandApproval } = await import(
+		const { inspectRestartCommandResult, inspectRestartRun } = await import(
 			"@cybergarage/orbit"
 		);
 		const report = inspectRestartRun(scope, saved.orbitRunId);
@@ -100,10 +100,9 @@ export async function inspectHostRestart(
 			return { journal: report.journal };
 		// Absence remains distinct from a retained receipt which could not be matched.
 		const binding = scopedReadinessReceipt(active, saved);
-		const receiptStatus =
-			binding && verifyRestartCommandApproval(scope, binding) === "matched"
-				? "approval-matched"
-				: "unverified";
+		const receiptStatus = binding
+			? inspectRestartCommandResult(scope, binding)
+			: "unverified";
 		return {
 			...(active.hostReadinessReceipt !== undefined
 				? { readinessReceipt: receiptStatus }

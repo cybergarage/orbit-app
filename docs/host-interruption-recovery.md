@@ -95,10 +95,10 @@ identity into its own synthetic registry. Another run waits for the synthetic
 provider's follow-up request and verifies the matching Core operation result
 already exists. The early-interruption case has no receipt. Relaunch checks
 that the journal and writer evidence are unchanged, no probe is replayed, and
-no raw receipt reaches the renderer. Only the pending, matching case displays
-a verified approval. The current Core API does not identify a completed
-result for a supplied approval binding; zero unresolved operations alone is
-not evidence that this particular probe result was recorded.
+no raw receipt reaches the renderer. The pending, matching case displays a verified approval. If Core recorded
+the original successful result for that exact binding, the notice and event
+log report it separately. Zero unresolved operations alone is not evidence
+that this particular probe result was recorded.
 
 ## Proposed next contract
 
@@ -142,11 +142,11 @@ process restart while the active slot is retained; it is not an audit log
 once the active slot is cleared. It is not sent to the renderer or used to
 resolve the operation. On restart, App checks its saved scope, immutable image,
 owner, child ID shape and single approval attempt, then Core independently
-matches the binding against the original request, grant, and pending command
-intent. The notice reports only a matching approval or an unverified receipt;
-it never displays the receipt itself. A receipt for a command with an already
-recorded successful outcome is not a match for this pending-only inspection.
-Neither status changes the writer gate or establishes any workspace effects.
+matches the binding against the original request, grant, command intent,
+and any recorded successful result. The notice and event log report a
+matching approval, recorded result, or unverified receipt without exposing
+the receipt. None of these observations changes the writer gate or establishes
+any workspace effects.
 
 Before considering a write-capable recovery transition, specify reviewed
 evidence for each permitted effect and require Core to revalidate under

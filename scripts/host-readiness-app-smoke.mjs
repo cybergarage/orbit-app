@@ -699,9 +699,10 @@ async function exerciseRestartAfterReceipt(
 		assert.equal(provider.requests.length, offset + 2);
 		const { active } = await readRegistry(base);
 		const { journal, writer } = runEvidencePaths(chat.cwd, active);
-		const [journalBefore, writerBefore] = await Promise.all([
+		const [journalBefore, writerBefore, writerStat] = await Promise.all([
 			fs.readFile(journal),
 			fs.readFile(writer),
+			fs.stat(writer),
 		]);
 		assert.ok(
 			operationEvents(journalBefore, record.approval.operationId).some(
@@ -717,34 +718,56 @@ async function exerciseRestartAfterReceipt(
 			(await readRegistry(base)).active.hostReadinessReceipt,
 			record,
 		);
-		app = await launch(executablePath, base, port, env, true, false);
-		const reopened = await app.firstWindow();
-		await confirmTestDisplay(app, "after relaunch with receipt");
-		await assertRetainedRecovery(reopened, chat, owner);
-		assert.deepEqual(
-			(await readRegistry(base)).active.hostReadinessReceipt,
-			record,
-		);
-		const resumed = await snapshot(reopened);
-		assert.equal(resumed.active.hostReadinessReceipt, undefined);
-		// The provider already received the result and Core's exact operation
-		// binding must be verified independently of the observation in the fixture.
-		assert.deepEqual(resumed.hostRestartDiagnostic, {
-			journal: "open",
-			unresolvedOperations: 0,
-			readinessReceipt: "result-recorded",
-		});
-		await expect(reopened.locator(".recovery-notice")).toContainText(
-			"Core recorded a successful result for the matched readiness probe.",
-		);
-		await reopened.getByRole("button", { name: "Debug", exact: true }).click();
-		await expect(reopened.locator(".restart-evidence-log")).toContainText(
-			"Core recorded a successful result for the matched readiness probe.",
-		);
-		assert.deepEqual(await fs.readFile(journal), journalBefore);
-		assert.deepEqual(await fs.readFile(writer), writerBefore);
-		provider.verify();
-		assert.equal(provider.requests.length, offset + 2);
+		const inspectSavedResult = async (inspection) => {
+			const inspector = await launch(
+				executablePath,
+				base,
+				port,
+				env,
+				true,
+				false,
+			);
+			try {
+				const reopened = await inspector.firstWindow();
+				await confirmTestDisplay(inspector, `receipt inspection ${inspection}`);
+				await assertRetainedRecovery(reopened, chat, owner);
+				assert.deepEqual(
+					(await readRegistry(base)).active.hostReadinessReceipt,
+					record,
+				);
+				const resumed = await snapshot(reopened);
+				assert.equal(resumed.active.hostReadinessReceipt, undefined);
+				// The provider already received the result and Core's exact operation
+				// binding must be verified independently of the observation in the fixture.
+				assert.deepEqual(resumed.hostRestartDiagnostic, {
+					journal: "open",
+					unresolvedOperations: 0,
+					readinessReceipt: "result-recorded",
+				});
+				await expect(reopened.locator(".recovery-notice")).toContainText(
+					"Core recorded a successful result for the matched readiness probe.",
+				);
+				await reopened
+					.getByRole("button", { name: "Debug", exact: true })
+					.click();
+				await expect(reopened.locator(".restart-evidence-log")).toContainText(
+					"Core recorded a successful result for the matched readiness probe.",
+				);
+				assert.deepEqual(await fs.readFile(journal), journalBefore);
+				assert.deepEqual(await fs.readFile(writer), writerBefore);
+				const writerAfter = await fs.stat(writer);
+				assert.equal(writerAfter.ino, writerStat.ino);
+				assert.equal(writerAfter.mtimeMs, writerStat.mtimeMs);
+				await assertOneCompletedProbe(env, owner);
+				provider.verify();
+				assert.equal(provider.requests.length, offset + 2);
+			} finally {
+				await inspector.close();
+			}
+		};
+		// The same profile must close before the next launch acquires its lock.
+		await inspectSavedResult(1);
+		await inspectSavedResult(2);
 	} finally {
 		provider.beforeReply(undefined);
 		finishReply();

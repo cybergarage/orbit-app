@@ -98,7 +98,10 @@ that the journal and writer evidence are unchanged, no probe is replayed, and
 no raw receipt reaches the renderer. The pending, matching case displays a verified approval. If Core recorded
 the original successful result for that exact binding, the notice and event
 log report it separately. Zero unresolved operations alone is not evidence
-that this particular probe result was recorded.
+that this particular probe result was recorded. The completed-result scenario
+also closes App normally and launches a second time against the same retained
+profile to verify that both inspections show the same result, the journal and
+writer are unchanged, and neither Docker nor the model is called to replay it.
 
 ## Proposed next contract
 

@@ -41,6 +41,12 @@ empty chat or draft can be opened without accepting a run, but the UI must not
 offer it as a recovery shortcut. Do not copy unfinished assistant or tool
 output into a successor chat or promote it into Project memory.
 
+The packaged crash fixture creates a second conversation in the same Project,
+verifies that both chats resolve to the same workspace, and submits a fresh
+request from the second chat. The occupied run slot rejects it before model
+submission or a new Docker child, without changing either chat's execution
+state or the retained journal and writer.
+
 ## Core boundary
 
 The current [exact Core pin](../core-pin.json) exposes two different mechanisms.

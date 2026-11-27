@@ -104,6 +104,8 @@ async function openChat(page, base) {
 	await page.getByRole("button", { name: "Chat 1", exact: true }).click();
 	return {
 		cwd,
+		projectId: project.id,
+		sessionId: chat.id,
 		selectModel: () =>
 			ipc("select-model", {
 				projectId: project.id,
@@ -123,6 +125,58 @@ async function openChat(page, base) {
 				.find(({ id }) => id === project.id)
 				.sessions.find(({ id }) => id === chat.id),
 	};
+}
+
+async function assertSharedWorkspaceBlocked(page, chat, env) {
+	const second = await call(page, "create-session", {
+		projectId: chat.projectId,
+	});
+	assert.notEqual(second.id, chat.sessionId);
+	assert.equal(await fs.realpath(second.workspace), chat.cwd);
+	await page.getByRole("button", { name: second.name, exact: true }).click();
+	const before = await snapshot(page);
+	assert.equal(before.active.sessionId, chat.sessionId);
+	assert.equal(before.recoveryBlockReason, "host-writer-retained");
+
+	const since = new Date().toISOString();
+	await assert.rejects(
+		call(page, "submit", {
+			projectId: chat.projectId,
+			sessionId: second.id,
+			requestId: randomUUID(),
+			prompt: "Attempt a new run in the retained workspace.",
+			...model,
+		}),
+		/A worker is already active/,
+	);
+	const after = await snapshot(page);
+	assert.deepEqual(after.active, before.active);
+	assert.equal(after.recoveryBlocked, true);
+	assert.deepEqual(after.projects, before.projects);
+	assert.deepEqual(after.hostRestartDiagnostic, before.hostRestartDiagnostic);
+
+	// Include starts under a different owner, not just replays of the original.
+	assert.equal(
+		docker(
+			[
+				"events",
+				"--since",
+				since,
+				"--until",
+				"0s",
+				"--filter",
+				"type=container",
+				"--filter",
+				"event=create",
+				"--filter",
+				"label=org.cybergarage.orbit-app.workspace-parent",
+				"--format",
+				"{{.Actor.ID}}",
+			],
+			env,
+		),
+		"",
+	);
 }
 
 async function prepareDecision(page, provider, env, base, imageId, followUp) {
@@ -819,8 +873,9 @@ async function exerciseRestart(
 		await killFixtureApp(app);
 		app = undefined;
 		assert.equal(await waitProbeRunning(env, owner), child);
-		const [journalBefore, ownerBefore] = await Promise.all([
+		const [journalBefore, ownerBytes, ownerBefore] = await Promise.all([
 			fs.readFile(journal),
+			fs.readFile(ownerEvidence),
 			fs.stat(ownerEvidence),
 		]);
 		assert.match(journalBefore.toString("utf8"), /"kind":"operation-intent"/);
@@ -850,6 +905,7 @@ async function exerciseRestart(
 			"Workspace changes have not been verified.",
 		);
 		await expect(notice).not.toContainText("saved readiness probe report");
+		await assertSharedWorkspaceBlocked(reopened, chat, env);
 		for (const observation of [state, await snapshot(reopened)]) {
 			assert.deepEqual(observation.active.hostRecovery, saved);
 			assert.equal(observation.active.hostReadinessReceipt, undefined);
@@ -859,6 +915,7 @@ async function exerciseRestart(
 			});
 		}
 		assert.deepEqual(await fs.readFile(journal), journalBefore);
+		assert.deepEqual(await fs.readFile(ownerEvidence), ownerBytes);
 		const ownerAfter = await fs.stat(ownerEvidence);
 		assert.equal(ownerAfter.ino, ownerBefore.ino);
 		assert.equal(ownerAfter.mtimeMs, ownerBefore.mtimeMs);

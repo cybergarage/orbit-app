@@ -444,6 +444,51 @@ test("schedule occurrence captures admission failures without fabricated answers
 	assert.ok(restored.state.executions?.[0].endedAt);
 });
 
+test("a due schedule for a second chat sharing a recovery-blocked workspace remains pending", async () => {
+	const sup = new Supervisor(
+		await directory(),
+		() => {},
+		() => {
+			assert.fail("Recovery must block worker creation");
+		},
+	);
+	await sup.init();
+	try {
+		const project = await sup.store.createProject("Shared workspace");
+		const original = await sup.store.createSession(project.id);
+		const second = await sup.store.createSession(project.id);
+		assert.notEqual(second.id, original.id);
+		assert.equal(
+			await sup.store.executionWorkspace(project.id, second.id),
+			await sup.store.executionWorkspace(project.id, original.id),
+		);
+		sup.health = async () => assert.fail("Recovery must block admission");
+		const schedule = await sup.dispatch("schedule", {
+			projectId: project.id,
+			sessionId: second.id,
+			prompt: "Scheduled task",
+			model: "fixture",
+			nextAt: Date.now() + 60_000,
+			intervalMs: 3_600_000,
+		});
+		// A saved Host run is not recoverable by this supervisor's mode.
+		const active = {
+			runtime: "host-v1" as const,
+			projectId: project.id,
+			sessionId: original.id,
+		};
+		sup.store.state.active = active;
+		await sup.reconcile();
+		assert.equal(sup.store.state.recoveryBlocked, true);
+		const before = structuredClone(sup.store.state);
+		assert.equal(schedule.enabled, true);
+		await sup.tick(schedule.nextAt);
+		assert.deepEqual(sup.store.state, before);
+	} finally {
+		await sup.close();
+	}
+});
+
 test("scheduled worker events, approval decisions, result and duration are independently retained", async () => {
 	let finish: () => void = () => {},
 		emit: (e: any) => void = () => {};

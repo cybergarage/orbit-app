@@ -735,6 +735,32 @@ async function killFixtureApp(app) {
 	assert.equal(signal, "SIGKILL");
 }
 
+// The application offers a separate legacy profile, not a selector that
+// rebinds a live run. Booting legacy must not inspect or adopt Host evidence.
+async function assertLegacyDoesNotAdoptHostRun(launchLegacy, base, chat) {
+	const registry = registryPath(base);
+	const before = await fs.readFile(registry);
+	const legacy = await launchLegacy();
+	try {
+		const page = await legacy.firstWindow();
+		await confirmTestDisplay(legacy, "legacy profile after Host interruption");
+		const state = await snapshot(page);
+		assert.equal(state.executionBackend, undefined);
+		assert.deepEqual(state.projects, []);
+		assert.equal(state.active, undefined);
+		assert.notEqual(state.recoveryBlocked, true);
+		assert.equal(state.hostRestartDiagnostic, undefined);
+		await expect(page.locator(".recovery-notice")).toBeHidden();
+		await assert.rejects(
+			call(page, "knowledge-status", { projectId: chat.projectId }),
+			/Project not found|Unknown project/i,
+		);
+	} finally {
+		await legacy.close();
+	}
+	assert.deepEqual(await fs.readFile(registry), before);
+}
+
 async function exerciseRestartAfterReceipt(
 	executablePath,
 	base,
@@ -791,6 +817,18 @@ async function exerciseRestartAfterReceipt(
 			(await readRegistry(base)).active.hostReadinessReceipt,
 			record,
 		);
+		await assertLegacyDoesNotAdoptHostRun(
+			() => launch(executablePath, base, port, env, false, false),
+			base,
+			chat,
+		);
+		assert.deepEqual(await fs.readFile(journal), journalBefore);
+		assert.deepEqual(await fs.readFile(writer), writerBefore);
+		const writerAfterLegacy = await fs.stat(writer);
+		assert.equal(writerAfterLegacy.ino, writerStat.ino);
+		assert.equal(writerAfterLegacy.mtimeMs, writerStat.mtimeMs);
+		await assertOneCompletedProbe(env, owner);
+		assert.equal(provider.requests.length, offset + 2);
 		const inspectSavedResult = async (inspection) => {
 			const inspector = await launch(
 				executablePath,

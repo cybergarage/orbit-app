@@ -166,6 +166,54 @@ allow a fresh run despite a retained session, it needs a separate design for
 durable recovery slots and proven workspace/storage isolation. Neither
 capability is part of this proposal.
 
+### Next milestone: evidence for one existing-file edit
+
+Start with a single approved `edit` that replaces one existing regular file
+with different bytes. Exclude absent-file creation, multi-file changes,
+commands and Git. The first milestone is diagnostic only: no replay,
+rollback, journal transition, or writer release.
+
+The current writer verifies the prepared preimage and result digests, syncs
+the staged file, renames it over the target, syncs the parent directory, and
+reads back the result. Its reply is not a durable receipt. A crash can occur
+after rename and before the reply or the Core result is recorded. The
+preimage check is an optimistic check, not exclusive ownership against an
+editor or another process writing to the same workspace. The Core session
+writer and App's active slot do not provide that filesystem exclusion.
+
+| Evidence after restart | Diagnostic conclusion |
+| --- | --- |
+| Target matches the expected result, but there is no durable executor receipt | Expected bytes observed. This does not show which process wrote them or whether the edit ran. |
+| Target matches the preimage, but there is no durable executor receipt | Original bytes observed. This does not rule out a write followed by a revert. |
+| Target matches neither digest, disappears, or fails bounded regular-file validation | State changed or could not be verified. Preserve it and retain protection. |
+| Exact receipt says the executor verified the result after the commit and sync steps, and current readback matches | The executor observed a committed edit at that time, and the expected bytes are present at inspection. The session still remains blocked. |
+| A receipt conflicts with the current file, scope, image, child, or approval binding | Report the discrepancy; do not resolve the operation or treat the old receipt as current state. |
+
+For an implementation PR, first define a versioned, private receipt for the
+exact prepared edit. Bind it to the canonical workspace and target, Core
+storage pair/session/run/operation and approval, the immutable writer image
+and owned child ID, and the prepared preimage and result digests. Record only
+facts verified after the commit and sync steps. Do not store file contents or
+surface identifiers or digests in the renderer. A receipt persisted by App
+after receiving a worker reply cannot cover a crash before that reply; keep
+that window explicitly unknown. Start with synthetic files and fault
+injection, and verify that repeated inspection cannot dispatch a model or
+writer or rewrite the Core journal.
+
+Use synthetic fixtures for interruption before rename, after rename but before
+receipt persistence, and after a durable receipt but before the Core result.
+Add cases where an independent writer leaves the same expected bytes or
+restores the preimage without a receipt, and where it changes the file after
+a valid receipt. These cases should produce different observations without
+opening the execution gate. Simulated crashes establish ordering and
+classification, not power-loss durability on a Docker bind mount.
+
+A later PR may propose a Core recovery transition only if it can demonstrate
+exclusive ownership across recovery and explicitly define the effect that can
+be reconciled. In particular, a current digest match, a stopped worker and a
+Core session lock do not by themselves prevent an external workspace writer
+from changing the file between inspection and reconciliation.
+
 ### Acceptance criteria
 
 | Scenario | Required result |

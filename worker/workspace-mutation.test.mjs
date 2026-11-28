@@ -146,3 +146,65 @@ test("one-shot entry bounds frames and emits no success for cancelled input", as
 	assert.equal(signal, "SIGTERM");
 	assert.equal(output, "");
 });
+
+const interruptAtRename = `
+	const [moduleUrl, root, phase, request] = process.argv.slice(1);
+	const fs = (await import("node:fs/promises")).default;
+	const rename = fs.rename;
+	// Only this disposable subprocess modifies its filesystem module.
+	fs.rename = async (...args) => {
+		if (phase === "after") await rename(...args);
+		process.kill(process.pid, "SIGKILL");
+	};
+	const { executeWorkspaceMutation } = await import(moduleUrl);
+	const result = await executeWorkspaceMutation(JSON.parse(request), root);
+	console.log(JSON.stringify(result));
+`;
+
+for (const [phase, expectedBytes] of [
+	["before", "prefix old suffix"],
+	["after", "prefix new suffix"],
+]) {
+	test(
+		`interruption ${phase} rename loses the edit acknowledgment`,
+		linux,
+		async (t) => {
+			const { root, note } = await fixture(t);
+			const original = "prefix old suffix";
+			await fs.writeFile(note, original);
+			const edit = {
+				...write("prefix new suffix", original),
+				name: "edit",
+				input: { path: "/workspace/note", oldText: "old", newText: "new" },
+			};
+			const result = spawnSync(
+				process.execPath,
+				[
+					"--input-type=module",
+					"-e",
+					interruptAtRename,
+					new URL("./workspace/workspace-mutation.mjs", import.meta.url).href,
+					root,
+					phase,
+					JSON.stringify(edit),
+				],
+				{ encoding: "utf8", timeout: 5_000 },
+			);
+			assert.ifError(result.error);
+			assert.equal(result.status, null, result.stderr);
+			assert.equal(result.signal, "SIGKILL", result.stderr);
+			assert.equal(result.stdout, "");
+			assert.equal(result.stderr, "");
+			assert.equal(await fs.readFile(note, "utf8"), expectedBytes);
+			const staged = (await fs.readdir(root)).filter((file) => file !== "note");
+			assert.equal(staged.length, phase === "before" ? 1 : 0);
+			if (phase === "before") {
+				assert.match(staged[0], /^\.orbit-workspace-[a-f0-9-]+\.tmp$/);
+				assert.equal(
+					await fs.readFile(path.join(root, staged[0]), "utf8"),
+					"prefix new suffix",
+				);
+			}
+		},
+	);
+}

@@ -161,6 +161,35 @@ async function readRegular(file) {
 	}
 }
 
+/** Internal diagnostic only. A byte match never proves execution or no effects. */
+export async function observeExistingEdit(evidence, root = ROOT) {
+	if (
+		!keysWithin(evidence, ["target", "preimageSha256", "resultSha256"]) ||
+		typeof evidence.target !== "string" ||
+		!validHash(evidence.preimageSha256) ||
+		!validHash(evidence.resultSha256) ||
+		evidence.preimageSha256 === evidence.resultSha256
+	)
+		return "unverified";
+
+	try {
+		const parts = relative(evidence.target);
+		return await withTarget(root, parts, async (directory, name, parent) => {
+			const parentLink = `/proc/self/fd/${directory.fd}`;
+			if ((await fs.readlink(parentLink)) !== parent) return "unverified";
+			const current = await readRegular(childOf(directory, name));
+			if (!current || (await fs.readlink(parentLink)) !== parent)
+				return "unverified";
+			const actual = digest(current.bytes);
+			if (actual === evidence.preimageSha256) return "original-bytes-observed";
+			if (actual === evidence.resultSha256) return "expected-bytes-observed";
+			return "different-bytes-observed";
+		});
+	} catch {
+		return "unverified";
+	}
+}
+
 function verifiedPreimage(previous, expected) {
 	const actual = previous === null ? null : digest(previous.bytes);
 	if (actual !== expected) refuse("Workspace target changed after preparation");

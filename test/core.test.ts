@@ -444,7 +444,7 @@ test("schedule occurrence captures admission failures without fabricated answers
 	assert.ok(restored.state.executions?.[0].endedAt);
 });
 
-test("a due schedule for a second chat sharing a recovery-blocked workspace remains pending across restart", async () => {
+async function assertSharedWorkspaceRecoveryBlock(separateProject: boolean) {
 	const root = await directory();
 	const open = async () => {
 		const supervisor = new Supervisor(
@@ -461,16 +461,24 @@ test("a due schedule for a second chat sharing a recovery-blocked workspace rema
 	};
 
 	const blockSchedule = async (sup: Supervisor) => {
-		const project = await sup.store.createProject("Shared workspace");
+		const directoryPath = await directory();
+		const project = await sup.store.createProject(
+			"Shared workspace",
+			directoryPath,
+		);
 		const original = await sup.store.createSession(project.id);
-		const second = await sup.store.createSession(project.id);
+		const targetProject = separateProject
+			? await sup.store.createProject("Separate project", directoryPath)
+			: project;
+		assert.equal(targetProject.id !== project.id, separateProject);
+		const second = await sup.store.createSession(targetProject.id);
 		assert.notEqual(second.id, original.id);
 		assert.equal(
-			await sup.store.executionWorkspace(project.id, second.id),
+			await sup.store.executionWorkspace(targetProject.id, second.id),
 			await sup.store.executionWorkspace(project.id, original.id),
 		);
 		const schedule = await sup.dispatch("schedule", {
-			projectId: project.id,
+			projectId: targetProject.id,
 			sessionId: second.id,
 			prompt: "Scheduled task",
 			model: "fixture",
@@ -487,6 +495,16 @@ test("a due schedule for a second chat sharing a recovery-blocked workspace rema
 		await sup.reconcile();
 		assert.equal(sup.store.state.recoveryBlocked, true);
 		const before = structuredClone(sup.store.state);
+		await assert.rejects(
+			sup.dispatch("submit", {
+				projectId: targetProject.id,
+				sessionId: second.id,
+				requestId: randomUUID(),
+				prompt: "Attempt while the workspace is held",
+				model: "fixture",
+			}),
+			/A worker is already active/,
+		);
 		assert.equal(schedule.enabled, true);
 		await sup.tick(schedule.nextAt);
 		assert.deepEqual(sup.store.state, before);
@@ -514,7 +532,13 @@ test("a due schedule for a second chat sharing a recovery-blocked workspace rema
 	} finally {
 		await reopened.close();
 	}
-});
+}
+
+test("a due schedule for a second chat sharing a recovery-blocked workspace remains pending across restart", () =>
+	assertSharedWorkspaceRecoveryBlock(false));
+
+test("a separate project sharing a recovery-blocked workspace cannot admit work", () =>
+	assertSharedWorkspaceRecoveryBlock(true));
 
 test("scheduled worker events, approval decisions, result and duration are independently retained", async () => {
 	let finish: () => void = () => {},

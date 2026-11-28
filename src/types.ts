@@ -97,6 +97,14 @@ export interface HostReadinessReceipt {
 	approval: HostApprovalAttempt;
 	outcome: "fixed-probe-exited-zero";
 }
+/** Private executor evidence. It does not prove the current filesystem state. */
+export interface HostEditReceipt extends Omit<HostReadinessReceipt, "outcome"> {
+	outcome: "edit-verified-by-writer";
+	workspace: string;
+	target: string;
+	preimageSha256: string;
+	resultSha256: string;
+}
 export type HostRestartDiagnostic =
 	| { journal: "missing" | "unverified" }
 	| {
@@ -124,6 +132,7 @@ export interface Snapshot {
 		hostRecovery?: HostRecoveryIdentity;
 		hostApprovalAttempts?: HostApprovalAttempt[];
 		hostReadinessReceipt?: HostReadinessReceipt;
+		hostEditReceipts?: HostEditReceipt[];
 		workspaceMutations?: boolean;
 		workspaceReads?: boolean;
 		workspaceReadiness?: boolean;

@@ -3,9 +3,11 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import {
 	executeWorkspaceMutation,
+	type EditCapture,
 	type MutationPorts,
 } from "../src/workspace-mutation-client";
 
+const editImage = `sha256:${"1".repeat(64)}`;
 const operation = {
 	version: 1,
 	name: "write",
@@ -20,6 +22,7 @@ const operation = {
 function fixture(
 	attached: NonNullable<MutationPorts["attached"]>,
 	ownerMatches = true,
+	badImage = false,
 ) {
 	const parent = `orbit-app-${randomUUID()}`;
 	const path = "/synthetic/approved";
@@ -49,6 +52,8 @@ function fixture(
 					exists = true;
 					return "a".repeat(64);
 				case "inspect":
+					if (args.at(-1) === "a".repeat(64))
+						return `${"a".repeat(64)} ${badImage ? "other" : editImage} exited 0 ${parent}`;
 					return ownerMatches ? parent : "other";
 				case "rm":
 					exists = false;
@@ -63,8 +68,23 @@ function fixture(
 	};
 	return {
 		types,
-		call: (signal = new AbortController().signal) =>
-			executeWorkspaceMutation(parent, path, operation, signal, ports),
+		call: (signal = new AbortController().signal, capture?: EditCapture) =>
+			executeWorkspaceMutation(
+				parent,
+				path,
+				capture
+					? {
+							...operation,
+							name: "edit",
+							preimageSha256: "2".repeat(64),
+							input: { path: operation.target, oldText: "old", newText: "new" },
+						}
+					: operation,
+				signal,
+				ports,
+				"/workspace",
+				capture,
+			),
 	};
 }
 
@@ -114,4 +134,63 @@ test("cancelled admission creates nothing", async () => {
 	);
 	await assert.rejects(f.call(AbortSignal.abort()));
 	assert.deepEqual(f.types, []);
+});
+
+const editSuccess = {
+	content: [{ type: "text", text: "Workspace mutation completed." }],
+};
+
+test("captures a verified edit before child removal and result delivery", async () => {
+	const f = fixture(async () => editSuccess);
+	assert.deepEqual(
+		await f.call(undefined, {
+			image: editImage,
+			record: async (id) => {
+				assert.equal(id, "a".repeat(64));
+				assert.deepEqual(f.types, ["create", "inspect"]);
+				f.types.push("persist");
+			},
+		}),
+		editSuccess,
+	);
+	assert.deepEqual(f.types, [
+		"create",
+		"inspect",
+		"persist",
+		"ps",
+		"inspect",
+		"rm",
+		"ps",
+	]);
+});
+
+test("edit receipt is not fabricated when the child or response is unverified", async () => {
+	for (const [reply, badImage] of [
+		[editSuccess, true],
+		[{ content: [{ type: "text", text: "different success" }] }, false],
+	] as const) {
+		const f = fixture(async () => reply, true, badImage);
+		await assert.rejects(
+			f.call(undefined, {
+				image: editImage,
+				record: async () => assert.fail("Must not persist a receipt"),
+			}),
+			/outcome unknown/,
+		);
+		assert.equal(f.types.filter((type) => type === "create").length, 1);
+	}
+});
+
+test("failed receipt persistence cannot report edit success", async () => {
+	const f = fixture(async () => editSuccess);
+	await assert.rejects(
+		f.call(undefined, {
+			image: editImage,
+			record: async () => {
+				throw new Error("synthetic storage failure");
+			},
+		}),
+		/synthetic storage failure/,
+	);
+	assert.deepEqual(f.types, ["create", "inspect", "ps", "inspect", "rm", "ps"]);
 });

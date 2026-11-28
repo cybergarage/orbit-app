@@ -7,7 +7,10 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { executeWorkspaceMutation } from "./workspace/workspace-mutation.mjs";
+import {
+	executeWorkspaceMutation,
+	observeExistingEdit,
+} from "./workspace/workspace-mutation.mjs";
 
 const linux = { skip: process.platform !== "linux" };
 const sha = (s) => createHash("sha256").update(s).digest("hex");
@@ -198,6 +201,21 @@ for (const [phase, expectedBytes] of [
 			assert.equal(await fs.readFile(note, "utf8"), expectedBytes);
 			const staged = (await fs.readdir(root)).filter((file) => file !== "note");
 			assert.equal(staged.length, phase === "before" ? 1 : 0);
+			const evidence = editEvidence();
+			for (let observation = 0; observation < 2; observation++) {
+				assert.equal(
+					await observeExistingEdit(evidence, root),
+					phase === "before"
+						? "original-bytes-observed"
+						: "expected-bytes-observed",
+				);
+			}
+			assert.equal(await fs.readFile(note, "utf8"), expectedBytes);
+			assert.deepEqual(
+				(await fs.readdir(root)).sort(),
+				["note", ...staged].sort(),
+			);
+
 			if (phase === "before") {
 				assert.match(staged[0], /^\.orbit-workspace-[a-f0-9-]+\.tmp$/);
 				assert.equal(
@@ -208,3 +226,49 @@ for (const [phase, expectedBytes] of [
 		},
 	);
 }
+
+function editEvidence() {
+	return {
+		target: "/workspace/note",
+		preimageSha256: sha("prefix old suffix"),
+		resultSha256: sha("prefix new suffix"),
+	};
+}
+
+test(
+	"edit readback reports observations, not the author of a change",
+	linux,
+	async (t) => {
+		const { root, note } = await fixture(t);
+		const evidence = editEvidence();
+		assert.equal(await observeExistingEdit(evidence, root), "unverified");
+		for (const [text, observation] of [
+			["prefix new suffix", "expected-bytes-observed"],
+			["prefix old suffix", "original-bytes-observed"],
+			["external change", "different-bytes-observed"],
+		]) {
+			await fs.writeFile(note, text); // Independent editor, not an Orbit operation.
+			assert.equal(await observeExistingEdit(evidence, root), observation);
+			assert.equal(await fs.readFile(note, "utf8"), text);
+		}
+		assert.equal(
+			await observeExistingEdit(
+				{ ...evidence, target: "/workspace/../note" },
+				root,
+			),
+			"unverified",
+		);
+		assert.equal(
+			await observeExistingEdit(
+				{ ...evidence, resultSha256: evidence.preimageSha256 },
+				root,
+			),
+			"unverified",
+		);
+		await fs.link(note, path.join(root, "hard"));
+		assert.equal(await observeExistingEdit(evidence, root), "unverified");
+		await fs.unlink(note);
+		await fs.symlink("hard", note);
+		assert.equal(await observeExistingEdit(evidence, root), "unverified");
+	},
+);

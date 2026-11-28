@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
 	Agent,
 	AgentOptions,
@@ -15,6 +15,7 @@ import type {
 } from "@cybergarage/orbit";
 import type {
 	HostApprovalAttempt,
+	HostEditReceipt,
 	HostReadinessReceipt,
 	HostRecoveryIdentity,
 } from "./types";
@@ -89,6 +90,8 @@ export function createDockerHostReader(
 }
 const dockerReader = createDockerHostReader();
 
+const sha256 = (value: string) =>
+	createHash("sha256").update(value).digest("hex");
 const mutations = ["write", "edit"] as const;
 const canMutate = (name: string) => mutations.some((tool) => tool === name);
 
@@ -100,6 +103,7 @@ export interface HostWriter {
 		artifact: string,
 		operation: PreparedWorkspaceOperation,
 		signal: AbortSignal,
+		recordEdit?: (containerId: string) => Promise<void>,
 	): Promise<ToolResult>;
 	stop(parent: string): Promise<unknown>;
 }
@@ -110,7 +114,7 @@ export function createDockerHostWriter(
 ): HostWriter {
 	return {
 		admit: () => admitWorkspaceWriterImage(run, imageRef),
-		mutate: (parent, workspace, artifact, operation, signal) =>
+		mutate: (parent, workspace, artifact, operation, signal, recordEdit) =>
 			executeWorkspaceMutation(
 				parent,
 				workspace,
@@ -123,6 +127,7 @@ export function createDockerHostWriter(
 						dockerWorkspaceArgs(name, root, artifact, false, true),
 				},
 				workspace,
+				recordEdit ? { image: artifact, record: recordEdit } : undefined,
 			),
 		stop: (parent) => stopWorkerWorkspaceMutation(parent),
 	};
@@ -141,6 +146,7 @@ interface HostRunConfig {
 	projectContext?: ProjectContextSnapshot;
 	recordRecoveryIdentity?: (identity: HostRecoveryIdentity) => Promise<void>;
 	recordApprovalAttempt?: (attempt: HostApprovalAttempt) => Promise<void>;
+	recordEditReceipt?: (receipt: HostEditReceipt) => Promise<void>;
 	recordReadinessReceipt?: (receipt: HostReadinessReceipt) => Promise<void>;
 }
 type ProviderRequest = (
@@ -208,6 +214,15 @@ export class HostAgentRun {
 	private readinessUsed = false;
 	private dockerCleanupChecked = false;
 	private approval?: HostApproval;
+	private editApprovals = new Map<
+		string,
+		{
+			attempt: HostApprovalAttempt;
+			target: string;
+			preimageSha256: string;
+			resultSha256: string;
+		}
+	>();
 	private readinessApproval?: HostApprovalAttempt;
 	private readerBlocked = false;
 	private readerTail = Promise.resolve();
@@ -263,6 +278,18 @@ export class HostAgentRun {
 				})
 			)
 				this.readinessApproval = attempt;
+			if (
+				request.preview.name === "edit" &&
+				typeof request.preview.path === "string" &&
+				typeof request.preview.before === "string" &&
+				typeof request.preview.after === "string"
+			)
+				this.editApprovals.set(attempt.operationId, {
+					attempt,
+					target: request.preview.path,
+					preimageSha256: sha256(request.preview.before),
+					resultSha256: sha256(request.preview.after),
+				});
 		}
 		await this.agent.replyApproval(request.runId, {
 			requestId: request.id,
@@ -446,6 +473,60 @@ export class HostAgentRun {
 		};
 	}
 
+	private async prepareEditCapture(
+		op: PreparedWorkspaceOperation,
+		image: string,
+		signal: AbortSignal,
+	) {
+		const record = this.config.recordEditReceipt;
+		if (
+			!record ||
+			op.name !== "edit" ||
+			!op.preimageSha256 ||
+			op.preimageSha256 === op.resultSha256
+		)
+			return undefined;
+		const preimageSha256 = op.preimageSha256;
+		const { inspectRestartRun } = await import("@cybergarage/orbit");
+		const repo = await hostRepository(this.core);
+		const scope = repo.scope(this.config.sessionId);
+		const report = inspectRestartRun(scope, this.orbitRunId);
+		const [id] = report.unresolvedOperationIds;
+		const approved = this.editApprovals.get(id);
+		signal.throwIfAborted();
+		if (
+			report.journal !== "open" ||
+			report.pairId !== scope.pairId ||
+			report.runId !== this.orbitRunId ||
+			report.sessionId !== this.config.sessionId ||
+			!report.writerRetained ||
+			report.unresolvedOperationIds.length !== 1 ||
+			approved?.target !== op.target ||
+			approved.preimageSha256 !== op.preimageSha256 ||
+			approved.resultSha256 !== op.resultSha256
+		)
+			return undefined;
+		this.editApprovals.delete(id);
+		return async (containerId: string) => {
+			signal.throwIfAborted();
+			await record({
+				version: 1,
+				outcome: "edit-verified-by-writer",
+				storagePairId: scope.pairId,
+				sessionId: this.config.sessionId,
+				orbitRunId: this.orbitRunId,
+				executorOwner: this.name,
+				image,
+				containerId,
+				approval: approved.attempt,
+				workspace: this.workspace,
+				target: op.target,
+				preimageSha256,
+				resultSha256: op.resultSha256,
+			});
+		};
+	}
+
 	private async mutate(
 		op: PreparedWorkspaceOperation,
 		runSignal: AbortSignal,
@@ -469,7 +550,15 @@ export class HostAgentRun {
 			if (this.readerBlocked || (await identity(this.workspace)) !== before)
 				throw new Error("Workspace no longer matches the admitted mount");
 			signal.throwIfAborted();
-			return writer.mutate(this.name, this.workspace, artifact, op, signal);
+			const record = await this.prepareEditCapture(op, artifact, signal);
+			return writer.mutate(
+				this.name,
+				this.workspace,
+				artifact,
+				op,
+				signal,
+				record,
+			);
 		});
 		this.readerTail = task.then(
 			() => {},

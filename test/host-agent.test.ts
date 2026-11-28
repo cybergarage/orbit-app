@@ -13,6 +13,7 @@ import {
 import { inspectHostRestart } from "../src/host-restart-diagnostics";
 import type {
 	HostApprovalAttempt,
+	HostEditReceipt,
 	HostReadinessReceipt,
 	HostRecoveryIdentity,
 } from "../src/types";
@@ -955,6 +956,7 @@ function mutationRun(
 	operations: ReadonlyArray<readonly [string, unknown]>,
 	decide: (run: HostAgentRun, id: string, i: number) => Promise<void>,
 	recordApprovalAttempt?: (attempt: HostApprovalAttempt) => Promise<void>,
+	recordEditReceipt?: (receipt: HostEditReceipt) => Promise<void>,
 ) {
 	let modelCalls = 0;
 	let approvals = 0;
@@ -973,6 +975,7 @@ function mutationRun(
 			provider: "openai",
 			prompt: "Synthetic Host Agent file-change test.",
 			recordApprovalAttempt,
+			recordEditReceipt,
 		},
 		(event) => {
 			if (event.type === "approval") {
@@ -1306,4 +1309,54 @@ test("Docker Host writer executes only approved changes and reaps owned containe
 	assert.equal(containers, 4);
 	await assertGone(second.run.name);
 	assert.deepEqual(await fs.readdir(f.workspace), ["note.txt"]);
+});
+
+test("Host edit receipt binds the captured child to the approved Core operation", async (t) => {
+	const f = await fixture(t);
+	const target = path.join(f.workspace, "receipt.txt");
+	await fs.writeFile(target, "before");
+	const attempts: HostApprovalAttempt[] = [];
+	const receipts: HostEditReceipt[] = [];
+	const { run, replies } = mutationRun(
+		f,
+		{
+			admit: async () => writerImage,
+			async mutate(_parent, _workspace, _image, op, _signal, record) {
+				assert.equal(op.name, "edit");
+				assert.ok(
+					record,
+					"Core's open edit intent must match the accepted approval",
+				);
+				await record("a".repeat(64));
+				return {
+					content: [{ type: "text", text: "synthetic editor acknowledgment" }],
+				};
+			},
+			stop: async () => {},
+		},
+		[["edit", { path: target, oldText: "before", newText: "after" }]],
+		(run, id) => run.approve(id, true),
+		async (attempt) => {
+			attempts.push(attempt);
+		},
+		async (receipt) => {
+			receipts.push(receipt);
+		},
+	);
+	await run.start();
+	await Promise.all(replies);
+	assert.equal(receipts.length, 1);
+	assert.deepEqual(receipts[0].approval, attempts[0]);
+	assert.equal(receipts[0].target, target);
+	assert.equal(receipts[0].workspace, f.workspace);
+	assert.equal(receipts[0].image, writerImage);
+	assert.equal(
+		receipts[0].preimageSha256,
+		createHash("sha256").update("before").digest("hex"),
+	);
+	assert.equal(
+		receipts[0].resultSha256,
+		createHash("sha256").update("after").digest("hex"),
+	);
+	assert.equal(await fs.readFile(target, "utf8"), "before");
 });

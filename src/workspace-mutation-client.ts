@@ -135,6 +135,36 @@ const startAttached = (
 		child.stdin.end(message);
 	});
 
+export interface EditCapture {
+	image: string;
+	record(containerId: string): Promise<void>;
+}
+
+async function recordVerifiedEdit(
+	capture: EditCapture,
+	parent: string,
+	id: string,
+	signal: AbortSignal,
+	ports: MutationPorts,
+) {
+	const observed = await ports.command(
+		ports.docker,
+		[
+			"inspect",
+			"--format",
+			`{{.Id}} {{.Image}} {{.State.Status}} {{.State.ExitCode}} {{index .Config.Labels "${ownerLabel}"}}`,
+			id,
+		],
+		controlDeadline,
+	);
+	signal.throwIfAborted();
+	const expected = [id, capture.image, "exited", "0", parent];
+	if (observed.trim().split(/\s+/).join(" ") !== expected.join(" "))
+		throw uncertain();
+	await capture.record(id);
+	signal.throwIfAborted();
+}
+
 export async function executeWorkspaceMutation(
 	parent: string,
 	workspace: string,
@@ -142,6 +172,7 @@ export async function executeWorkspaceMutation(
 	signal: AbortSignal,
 	ports: MutationPorts,
 	sourceRoot = "/workspace",
+	capture?: EditCapture,
 ) {
 	signal.throwIfAborted();
 	if (operation.name !== "write" && operation.name !== "edit")
@@ -163,7 +194,16 @@ export async function executeWorkspaceMutation(
 			signal,
 		);
 		signal.throwIfAborted();
-		return acknowledged(result);
+		const reply = acknowledged(result);
+		if (capture && operation.name === "edit" && !reply.isError) {
+			if (
+				reply.content[0].type !== "text" ||
+				reply.content[0].text !== "Workspace mutation completed."
+			)
+				throw uncertain();
+			await recordVerifiedEdit(capture, parent, id, signal, ports);
+		}
+		return reply;
 	} finally {
 		await stopWorkspaceMutation(parent, ports);
 	}

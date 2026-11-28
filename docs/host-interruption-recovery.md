@@ -200,6 +200,17 @@ that window explicitly unknown. Start with synthetic files and fault
 injection, and verify that repeated inspection cannot dispatch a model or
 writer or rewrite the Core journal.
 
+App's first capture step is limited to an approved existing-file edit with
+matching prepared digests and a single unresolved Core intent. It verifies
+the writer's acknowledged success and checks the exited child's exact ID,
+immutable image, exit code and owner. It saves the private receipt before
+removing the child or returning the successful tool result. The receipt stays
+with the retained active run; it is not an audit trail and is not sent to the
+renderer. Missing or redacted approval evidence does not fabricate a receipt.
+A crash before the App saves it still leaves no recoverable completion
+evidence. Restart-time receipt validation and file observation are separate
+from this capture step and are not enabled by it.
+
 Use synthetic fixtures for interruption before rename, after rename but before
 receipt persistence, and after a durable receipt but before the Core result.
 Add cases where an independent writer leaves the same expected bytes or
